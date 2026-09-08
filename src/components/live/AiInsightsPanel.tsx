@@ -143,6 +143,7 @@ export const AiInsightsPanel: React.FC = () => {
   const activeTab = useLiveMeetingStore((s) => s.activeTab);
   const setActiveTab = useLiveMeetingStore((s) => s.setActiveTab);
   const aiStatus = useLiveMeetingStore((s) => s.aiStatus);
+  const aiSource = useLiveMeetingStore((s) => s.aiSource);
   const mode = useLiveMeetingStore((s) => s.mode);
   const unread = useLiveMeetingStore((s) => s.unread);
 
@@ -190,15 +191,47 @@ export const AiInsightsPanel: React.FC = () => {
           </div>
           <span
             className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase tracking-wider border ${
-              aiStatus === 'analyzing'
-                ? 'bg-sky-50 text-sky-700 border-sky-200'
-                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              aiStatus === 'error'
+                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                : aiStatus === 'analyzing'
+                  ? 'bg-sky-50 text-sky-700 border-sky-200'
+                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
             }`}
           >
             <span
-              className={`w-1.5 h-1.5 rounded-full animate-pulse ${aiStatus === 'analyzing' ? 'bg-sky-500' : 'bg-emerald-500'}`}
+              className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                aiStatus === 'error' ? 'bg-rose-500' : aiStatus === 'analyzing' ? 'bg-sky-500' : 'bg-emerald-500'
+              }`}
             />
-            {aiStatus === 'analyzing' ? 'Analyzing' : 'Listening'}
+            {aiStatus === 'error' ? 'Error' : aiStatus === 'analyzing' ? 'Analyzing' : 'Listening'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 mt-2.5">
+          <span
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider border ${
+              aiSource === 'gemini'
+                ? 'bg-sky-50 text-sky-700 border-sky-200'
+                : aiSource === 'fallback'
+                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : 'bg-slate-50 text-slate-500 border-slate-200'
+            }`}
+            title={
+              aiSource === 'gemini'
+                ? 'Detections produced by real Gemini calls (gemini-3.6-flash)'
+                : aiSource === 'fallback'
+                  ? 'Gemini unavailable — detections produced by the heuristic fallback engine'
+                  : 'Waiting for the first analysis result'
+            }
+          >
+            {aiSource === 'gemini' ? 'GEMINI' : aiSource === 'fallback' ? 'FALLBACK' : 'AI READY'}
+          </span>
+          <span className="text-[10px] font-mono text-slate-400 truncate">
+            {aiSource === 'gemini'
+              ? 'gemini-3.6-flash'
+              : aiSource === 'fallback'
+                ? 'heuristic engine'
+                : 'gemini-3.6-flash'}
           </span>
         </div>
       </div>
@@ -268,8 +301,12 @@ export const AiInsightsPanel: React.FC = () => {
 
       <div className="px-4 py-2.5 border-t border-slate-100 shrink-0">
         <p className="text-[10px] font-mono text-slate-400 flex items-center gap-1.5">
-          <AudioLines className="w-3 h-3 text-sky-400" />
-          LiveKit audio → STT → MeetFlow AI extraction
+          <AudioLines className={`w-3 h-3 ${aiSource === 'fallback' ? 'text-amber-400' : 'text-sky-400'}`} />
+          {aiSource === 'fallback'
+            ? 'Heuristic fallback — Gemini unavailable'
+            : aiSource === 'gemini'
+              ? 'LiveKit audio → STT → Gemini 3.6 Flash'
+              : 'LiveKit audio → STT → MeetFlow AI extraction'}
           {mode === 'demo' && <span className="text-amber-500">· simulated transcript</span>}
         </p>
       </div>

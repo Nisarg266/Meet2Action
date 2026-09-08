@@ -17,7 +17,7 @@ import { mockMeetings, initialActionItems, initialDecisions } from '../data/mock
 
 export const Settings: React.FC = () => {
   const { addToast, setShowSplash } = useAppStore();
-  const [model, setModel] = useState('gemini-2.5-flash');
+  const [model, setModel] = useState('gemini-3.6-flash');
   const [confidenceThreshold, setConfidenceThreshold] = useState(70);
   const [autoNormalizeDates, setAutoNormalizeDates] = useState(true);
   const [notifySlack, setNotifySlack] = useState(true);
@@ -81,8 +81,8 @@ export const Settings: React.FC = () => {
                 onChange={(e) => setModel(e.target.value)}
                 className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 font-medium"
               >
-                <option value="gemini-2.5-flash">Gemini 2.5 Flash (High speed &amp; live transcription)</option>
-                <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep reasoning &amp; multi-hour transcripts)</option>
+                <option value="gemini-3.6-flash">Gemini 3.6 Flash (High speed &amp; live transcription)</option>
+                <option value="gemini-3.6-pro">Gemini 3.6 Pro (Deep reasoning &amp; multi-hour transcripts)</option>
               </select>
             </div>
 

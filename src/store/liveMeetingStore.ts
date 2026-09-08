@@ -5,7 +5,9 @@ export type LivePhase = 'idle' | 'connecting' | 'live' | 'ending' | 'ended';
 export type LiveMode = 'live' | 'demo';
 export type LiveConnectionState = 'connected' | 'reconnecting' | 'disconnected' | 'demo';
 export type InsightTab = 'transcript' | 'actions' | 'decisions' | 'discussions';
-export type AiStatus = 'listening' | 'analyzing' | 'idle';
+export type AiStatus = 'listening' | 'analyzing' | 'idle' | 'error';
+/** Provenance of AI detections: real Gemini vs heuristic fallback. */
+export type AiSource = 'gemini' | 'fallback' | null;
 
 export interface EnrichmentPayload {
   highlightEntities?: TranscriptMessage['highlightEntities'];
@@ -20,6 +22,7 @@ interface LiveMeetingState {
   meeting: LiveMeeting;
   elapsedSeconds: number;
   aiStatus: AiStatus;
+  aiSource: AiSource;
   activeTab: InsightTab;
   unread: Record<InsightTab, number>;
   isMicOn: boolean;
@@ -37,6 +40,7 @@ interface LiveMeetingState {
   tick: () => void;
   setElapsed: (seconds: number) => void;
   setAiStatus: (status: AiStatus) => void;
+  setAiSource: (source: AiSource) => void;
   setActiveTab: (tab: InsightTab) => void;
   setMic: (on: boolean) => void;
   setCamera: (on: boolean) => void;
@@ -83,6 +87,7 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   meeting: emptyMeeting,
   elapsedSeconds: 0,
   aiStatus: 'listening',
+  aiSource: null,
   activeTab: 'transcript',
   unread: noUnread,
   isMicOn: true,
@@ -106,6 +111,8 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
         decisions: [],
       },
       elapsedSeconds: 0,
+      aiStatus: 'listening',
+      aiSource: null,
       activeTab: 'transcript',
       unread: noUnread,
       isMicOn: true,
@@ -121,6 +128,7 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   setConnection: (connection) => set({ connection }),
   setElapsed: (elapsedSeconds) => set({ elapsedSeconds }),
   setAiStatus: (aiStatus) => set({ aiStatus }),
+  setAiSource: (aiSource) => set({ aiSource }),
 
   tick: () => set((s) => ({ elapsedSeconds: s.elapsedSeconds + 1 })),
 
@@ -269,11 +277,9 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
       meeting: { ...emptyMeeting, startedAt: new Date().toISOString() },
       elapsedSeconds: 0,
       aiStatus: 'listening',
+      aiSource: null,
       activeTab: 'transcript',
       unread: noUnread,
-      isMicOn: true,
-      isCameraOn: true,
-      isScreenSharing: false,
       roster: [],
     }),
 }));

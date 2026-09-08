@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createLiveKitServer, isLiveKitEnvConfigured, resolveLiveKitEnv } from './tokenServer';
+import { isGeminiConfigured, GEMINI_MODEL } from './geminiService';
 
 dotenv.config();
 
@@ -31,11 +32,15 @@ const server = createLiveKitServer();
 
 server.listen(PORT, HOST, () => {
   const mode = isLiveKitEnvConfigured(resolveLiveKitEnv()) ? 'live' : 'demo';
+  // Safe status logging — the API key is NEVER printed.
   console.log(`\n================================================================`);
   console.log(`[MeetFlow AI] Production server running at: http://${HOST}:${PORT}`);
   console.log(`[MeetFlow AI] Health check:                 http://${HOST}:${PORT}/healthz`);
   console.log(`[MeetFlow AI] Serving React SPA from:       ${distPath}`);
   console.log(`[MeetFlow AI] LiveKit mode:                 ${mode}`);
+  console.log(`[MeetFlow AI] Gemini configured:            ${isGeminiConfigured()}`);
+  console.log(`[MeetFlow AI] Gemini model:                 ${GEMINI_MODEL}`);
+  console.log(`[MeetFlow AI] AI status:                    http://${HOST}:${PORT}/api/ai/status`);
   console.log(`[MeetFlow AI] API status:                   http://${HOST}:${PORT}/api/livekit/status`);
   console.log(`================================================================\n`);
 });

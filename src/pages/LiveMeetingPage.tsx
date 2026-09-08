@@ -556,6 +556,9 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
           const analysis = await response.json();
           const latest = useLiveMeetingStore.getState();
 
+          // Provenance: distinguish REAL Gemini results from heuristic fallback.
+          latest.setAiSource(analysis.source === 'gemini' ? 'gemini' : 'fallback');
+
           // Broadcast AI detection to peers via DataChannel
           try {
             if (room && room.state === 'connected') {
@@ -621,6 +624,7 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
         }
       } catch (err) {
         console.warn('AI segment analysis error:', err);
+        useLiveMeetingStore.getState().setAiStatus('error');
       } finally {
         setTimeout(() => useLiveMeetingStore.getState().setAiStatus('listening'), 1800);
       }
@@ -921,9 +925,13 @@ export const LiveMeetingPage: React.FC = () => {
             context: { meetingId: store.meeting.id, meetingTitle: store.meeting.title },
           }),
         })
-          .then((r) => r.json())
+          .then((r) => {
+            if (!r.ok) throw new Error(`analyze-segment failed (HTTP ${r.status})`);
+            return r.json();
+          })
           .then((analysis) => {
             const latest = useLiveMeetingStore.getState();
+            latest.setAiSource(analysis.source === 'gemini' ? 'gemini' : 'fallback');
             if (Array.isArray(analysis.actionItems)) {
               analysis.actionItems.forEach((a: any) =>
                 latest.upsertActionItem({
@@ -964,6 +972,11 @@ export const LiveMeetingPage: React.FC = () => {
                 })
               );
             }
+            setTimeout(() => useLiveMeetingStore.getState().setAiStatus('listening'), 1800);
+          })
+          .catch((err) => {
+            console.warn('Demo-mode AI segment analysis error:', err);
+            useLiveMeetingStore.getState().setAiStatus('error');
             setTimeout(() => useLiveMeetingStore.getState().setAiStatus('listening'), 1800);
           });
       },
@@ -1075,9 +1088,64 @@ export const LiveMeetingPage: React.FC = () => {
     const openDiscussions = liveDecisions.filter((d) => d.status === 'open').length;
     const owners = Array.from(new Set(liveActions.map((a) => a.assignee).filter(Boolean))).slice(0, 3);
 
+    // Provenance of the final analysis — never present fallback as Gemini.
+    const analysisEngine =
+      analyzed?.source === 'gemini'
+        ? 'Gemini (gemini-3.6-flash)'
+        : analyzed
+          ? 'heuristic fallback (Gemini unavailable)'
+          : 'heuristic fallback (analysis endpoint unreachable)';
+
     const summary =
-      analyzed?.summary ||
-      `Executive Synthesis: This live session (${formatDuration(elapsedSeconds)} on LiveKit) captured ${live.transcript.length} transcript segments and produced ${liveActions.length} structured action items, ${confirmedDecisions} confirmed decisions and ${openDiscussions} open discussions. Primary ownership was linked to ${owners.join(', ') || localName}.`;
+      (analyzed?.summary ||
+        `Executive Synthesis: This live session (${formatDuration(elapsedSeconds)} on LiveKit) captured ${live.transcript.length} transcript segments and produced ${liveActions.length} structured action items, ${confirmedDecisions} confirmed decisions and ${openDiscussions} open discussions. Primary ownership was linked to ${owners.join(', ') || localName}.`) +
+      ` Analysis engine: ${analysisEngine}.`;
+
+    const analyzedActions = Array.isArray(analyzed?.actionItems)
+      ? analyzed.actionItems.map((a: any) => ({
+          id: a.id || `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          meetingId: live.id,
+          meetingTitle: live.title,
+          task: a.title,
+          assignee: a.assignee || 'Unassigned',
+          deadline: a.deadlineNormalized || a.deadlineText || null,
+          originalDeadlinePhrase: a.deadlineText || undefined,
+          priority: a.priority || 'Medium',
+          confidence: Math.round((a.confidence || 0.95) * 100),
+          status: 'todo',
+          sourceText: a.sourceText,
+          isConfirmed: false,
+          createdAt: new Date().toISOString().split('T')[0],
+        }))
+      : null;
+
+    const analyzedDecisions = Array.isArray(analyzed?.decisions)
+      ? analyzed.decisions.map((d: any) => ({
+          id: d.id || `dec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          meetingId: live.id,
+          meetingTitle: live.title,
+          text: d.text,
+          status: 'confirmed' as const,
+          category: d.category || 'Consensus',
+          confidence: Math.round((d.confidence || 0.94) * 100),
+          sourceText: d.sourceText,
+          createdAt: new Date().toISOString().split('T')[0],
+        }))
+      : null;
+
+    const analyzedDiscussions = Array.isArray(analyzed?.openDiscussions)
+      ? analyzed.openDiscussions.map((o: any) => ({
+          id: o.id || `disc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          meetingId: live.id,
+          meetingTitle: live.title,
+          text: o.text,
+          status: 'open' as const,
+          category: 'Unresolved Debate' as const,
+          confidence: Math.round((o.confidence || 0.85) * 100),
+          sourceText: o.sourceText,
+          createdAt: new Date().toISOString().split('T')[0],
+        }))
+      : [];
 
     const finalMeeting: Meeting = {
       id: live.id || `meet-${Date.now().toString(36)}`,
@@ -1093,42 +1161,11 @@ export const LiveMeetingPage: React.FC = () => {
       })),
       transcript: transcriptText,
       transcriptMessages: live.transcript,
-      actionItems: analyzed?.actionItems
-        ? mergeActionItems(
-            liveActions,
-            analyzed.actionItems.map((a: any) => ({
-              id: a.id || `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              meetingId: live.id,
-              meetingTitle: live.title,
-              task: a.title,
-              assignee: a.assignee || 'Unassigned',
-              deadline: a.deadlineNormalized || a.deadlineText || null,
-              originalDeadlinePhrase: a.deadlineText || undefined,
-              priority: a.priority || 'Medium',
-              confidence: Math.round((a.confidence || 0.95) * 100),
-              status: 'todo',
-              sourceText: a.sourceText,
-              isConfirmed: false,
-              createdAt: new Date().toISOString().split('T')[0],
-            }))
-          )
-        : liveActions,
-      decisions: analyzed?.decisions
-        ? mergeDecisions(
-            liveDecisions,
-            analyzed.decisions.map((d: any) => ({
-              id: d.id || `dec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              meetingId: live.id,
-              meetingTitle: live.title,
-              text: d.text,
-              status: 'confirmed',
-              category: d.category || 'Consensus',
-              confidence: Math.round((d.confidence || 0.94) * 100),
-              sourceText: d.sourceText,
-              createdAt: new Date().toISOString().split('T')[0],
-            }))
-          )
-        : liveDecisions,
+      actionItems: analyzedActions ? mergeActionItems(liveActions, analyzedActions) : liveActions,
+      decisions:
+        analyzedDecisions
+          ? mergeDecisions(liveDecisions, [...analyzedDecisions, ...analyzedDiscussions])
+          : mergeDecisions(liveDecisions, analyzedDiscussions),
       summary,
       status: 'analyzed',
       platform: 'LiveKit',
@@ -1142,7 +1179,13 @@ export const LiveMeetingPage: React.FC = () => {
 
     // Save into appStore and localStorage
     useAppStore.getState().addMeeting(finalMeeting);
-    addToast('Meeting ended — full AI intelligence synthesis is ready', 'success');
+    if (analyzed?.source === 'gemini') {
+      addToast('Meeting ended — Gemini analysis is ready', 'success');
+    } else if (analyzed) {
+      addToast('Meeting ended — analysis used heuristic fallback (Gemini unavailable)', 'warning');
+    } else {
+      addToast('Meeting ended — analysis service unreachable, saved transcript locally', 'warning');
+    }
 
     setTimeout(() => {
       useLiveMeetingStore.getState().resetLiveMeeting();

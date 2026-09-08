@@ -8,6 +8,7 @@ import {
   analyzeTranscriptSegment,
   analyzeFullMeeting,
   isGeminiConfigured,
+  GEMINI_MODEL,
   type TranscriptUtterance,
   type SegmentAnalysisContext,
 } from './geminiService';
@@ -153,9 +154,10 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
   });
 
   app.get('/ai/status', (_req: Request, res: Response) => {
+    // Safe status check: never exposes the API key.
     res.status(200).json({
       configured: isGeminiConfigured(),
-      model: 'gemini-2.5-flash',
+      model: GEMINI_MODEL,
     });
   });
 
@@ -168,20 +170,24 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
         ? [body.utterance]
         : [];
 
-      if (!utterances.length) {
-        res.status(200).json({ actionItems: [], decisions: [], openDiscussions: [] });
+      if (!utterances.length || !utterances.some((u) => typeof u?.text === 'string' && u.text.trim())) {
+        res.status(400).json({
+          error: 'invalid_input',
+          message: 'Request must include "utterances" with at least one non-empty "text".',
+        });
         return;
       }
 
       const context: SegmentAnalysisContext = body.context || {};
       const result = await analyzeTranscriptSegment(utterances, context);
+      // `result.source` is "gemini" | "fallback" — the UI distinguishes real
+      // Gemini results from heuristic fallback and never presents them as equal.
       res.status(200).json(result);
     } catch (error) {
-      console.error('[MeetFlow] /ai/analyze-segment error:', error);
+      console.error('[MeetFlow] /ai/analyze-segment error:', error instanceof Error ? error.message : String(error));
       res.status(500).json({
         error: 'ai_error',
         message: 'Failed to analyze transcript segment.',
-        detail: error instanceof Error ? error.message : String(error),
       });
     }
   });
@@ -193,14 +199,21 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
       const transcript = typeof rawTranscript === 'string' ? rawTranscript : '';
       const metadata = body.metadata || {};
 
+      if (!transcript.trim()) {
+        res.status(400).json({
+          error: 'invalid_input',
+          message: 'Request must include a non-empty "transcript".',
+        });
+        return;
+      }
+
       const result = await analyzeFullMeeting(transcript, metadata);
       res.status(200).json(result);
     } catch (error) {
-      console.error('[MeetFlow] /ai/analyze-meeting error:', error);
+      console.error('[MeetFlow] /ai/analyze-meeting error:', error instanceof Error ? error.message : String(error));
       res.status(500).json({
         error: 'ai_error',
         message: 'Failed to synthesize complete meeting.',
-        detail: error instanceof Error ? error.message : String(error),
       });
     }
   });

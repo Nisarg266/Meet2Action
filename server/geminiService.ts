@@ -1,7 +1,30 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ApiError, Type } from '@google/genai';
+import type { GenerateContentResponse, Schema } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+/**
+ * MeetFlow AI — server-side Gemini pipeline.
+ *
+ * SECURITY:
+ * - GEMINI_API_KEY is read ONLY from process.env (never sent to the frontend,
+ *   never returned by an endpoint, never logged).
+ *
+ * MODEL:
+ * - The previous 2.5 Flash model was retired for new users; all calls now use
+ * - GEMINI_MODEL = "gemini-3.6-flash" via models.generateContent with a
+ *   responseSchema (structured JSON output).
+ *
+ * RELIABILITY:
+ * - Errors are classified (permanent vs temporary). Temporary failures
+ *   (429 / 5xx / network / malformed JSON) are retried with exponential
+ *   backoff. Permanent failures (401 / 403 / 404 / bad request) fail fast.
+ * - On total failure the caller gets a clearly LABELED heuristic fallback
+ *   (source: "fallback") — never presented as real Gemini output.
+ */
+
+export const GEMINI_MODEL = 'gemini-3.6-flash';
 
 export interface TranscriptUtterance {
   id?: string;
@@ -61,6 +84,62 @@ export interface FullMeetingAnalysisResult {
   importantMoments?: { timestamp?: string; description: string }[];
 }
 
+/** Provenance: every analysis result declares whether it is REAL Gemini or fallback. */
+export interface AIGenerationMeta {
+  source: 'gemini' | 'fallback';
+  model: string;
+  fallbackReason?: string;
+}
+
+export type SegmentAnalysisResponse = SegmentAnalysisResult & AIGenerationMeta;
+export type FullMeetingAnalysisResponse = FullMeetingAnalysisResult & AIGenerationMeta;
+
+type FailureKind =
+  | 'not_configured'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'model_unavailable'
+  | 'bad_request'
+  | 'rate_limited'
+  | 'server_error'
+  | 'network'
+  | 'timeout'
+  | 'bad_response';
+
+interface GeminiFailure {
+  kind: FailureKind;
+  retryable: boolean;
+  message: string;
+}
+
+/** Thrown by callGeminiJson once retries are exhausted (or failure is permanent). */
+class GeminiCallError extends Error {
+  failure: GeminiFailure;
+  constructor(failure: GeminiFailure) {
+    super(failure.message);
+    this.name = 'GeminiCallError';
+    this.failure = failure;
+  }
+}
+
+function toFailure(error: unknown): GeminiFailure {
+  return error instanceof GeminiCallError
+    ? error.failure
+    : { kind: 'server_error', retryable: false, message: redact(error instanceof Error ? error.message : String(error)) };
+}
+
+const RETRYABLE_KINDS: ReadonlySet<FailureKind> = new Set([
+  'rate_limited',
+  'server_error',
+  'network',
+  'timeout',
+  'bad_response',
+]);
+
+const MAX_ATTEMPTS = 3;
+const BASE_BACKOFF_MS = 600;
+const REQUEST_TIMEOUT_MS = 30_000;
+
 let genAiClient: GoogleGenAI | null = null;
 
 export function getGeminiClient(): GoogleGenAI | null {
@@ -78,6 +157,159 @@ export function isGeminiConfigured(): boolean {
   return Boolean((process.env.GEMINI_API_KEY || '').trim());
 }
 
+/** Never allow the API key (or anything resembling it) into logs. */
+function redact(message: string): string {
+  const key = (process.env.GEMINI_API_KEY || '').trim();
+  let safe = message;
+  if (key) {
+    safe = safe.split(key).join('[REDACTED]');
+  }
+  return safe.replace(/key=[A-Za-z0-9_\-]{10,}/g, 'key=[REDACTED]').slice(0, 400);
+}
+
+function classifyError(error: unknown): GeminiFailure {
+  if (error instanceof ApiError) {
+    const message = redact(error.message || `HTTP ${error.status}`);
+    if (error.status === 401) return { kind: 'unauthorized', retryable: false, message };
+    if (error.status === 403) return { kind: 'forbidden', retryable: false, message };
+    if (error.status === 404) return { kind: 'model_unavailable', retryable: false, message };
+    if (error.status === 400) return { kind: 'bad_request', retryable: false, message };
+    if (error.status === 429) return { kind: 'rate_limited', retryable: true, message };
+    if (error.status >= 500) return { kind: 'server_error', retryable: true, message };
+    return { kind: 'server_error', retryable: true, message };
+  }
+
+  const err = error as { name?: string; message?: string; code?: string | number };
+  const message = redact(err?.message || String(error));
+  const lower = message.toLowerCase();
+
+  if (err?.name === 'SyntaxError') {
+    return { kind: 'bad_response', retryable: true, message: 'Malformed JSON response from Gemini' };
+  }
+  if (err?.name === 'AbortError' || lower.includes('abort')) {
+    return { kind: 'timeout', retryable: true, message: 'Gemini request timed out' };
+  }
+  if (
+    err?.name === 'TypeError' ||
+    lower.includes('fetch failed') ||
+    lower.includes('econnreset') ||
+    lower.includes('enotfound') ||
+    lower.includes('etimedout') ||
+    lower.includes('network')
+  ) {
+    return { kind: 'network', retryable: true, message };
+  }
+  if (lower.includes('api key') || lower.includes('unauthorized')) {
+    return { kind: 'unauthorized', retryable: false, message };
+  }
+  if (lower.includes('permission') || lower.includes('forbidden')) {
+    return { kind: 'forbidden', retryable: false, message };
+  }
+  if (lower.includes('not found') || lower.includes('no longer available')) {
+    return { kind: 'model_unavailable', retryable: false, message };
+  }
+  if (lower.includes('quota') || lower.includes('resource_exhausted') || lower.includes('rate limit')) {
+    return { kind: 'rate_limited', retryable: true, message };
+  }
+  return { kind: 'server_error', retryable: true, message };
+}
+
+function parseGeminiJson(raw: string | undefined): unknown {
+  if (!raw) throw new Error('Empty response from Gemini');
+  let text = raw.trim();
+  // Strip markdown code fences the model sometimes adds.
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    text = text.slice(start, end + 1);
+  }
+  return JSON.parse(text);
+}
+
+/**
+ * Core Gemini call with structured JSON output, classification and
+ * exponential backoff retries for temporary failures only.
+ */
+async function callGeminiJson<T>(params: {
+  contents: string;
+  responseSchema: Schema;
+  contextLabel: string;
+}): Promise<T> {
+  const client = getGeminiClient();
+  if (!client) {
+    throw new GeminiCallError({
+      kind: 'not_configured',
+      retryable: false,
+      message: 'GEMINI_API_KEY is not configured',
+    });
+  }
+
+  let lastFailure: GeminiFailure = { kind: 'server_error', retryable: true, message: 'unknown' };
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response: GenerateContentResponse = await client.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: params.contents,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: params.responseSchema,
+          abortSignal: controller.signal,
+        },
+      });
+
+      clearTimeout(timeout);
+      return parseGeminiJson(response.text) as T;
+    } catch (error) {
+      clearTimeout(timeout);
+      lastFailure = classifyError(error);
+
+      const willRetry = lastFailure.retryable && attempt < MAX_ATTEMPTS;
+      console.warn(
+        `[MeetFlow Gemini] ${params.contextLabel} failed (${lastFailure.kind}, attempt ${attempt}/${MAX_ATTEMPTS})` +
+          (willRetry ? ' — retrying with backoff' : ' — giving up') +
+          `: ${lastFailure.message}`
+      );
+
+      if (!willRetry) {
+        throw new GeminiCallError(lastFailure);
+      }
+      const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 300);
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+
+  throw new GeminiCallError(lastFailure);
+}
+
+function clampConfidence(value: unknown, fallback: number): number {
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(1, Math.max(0, num));
+}
+
+function sanitizeSegmentResult(parsed: unknown): SegmentAnalysisResult {
+  const raw = (parsed && typeof parsed === 'object' ? parsed : {}) as Partial<SegmentAnalysisResult>;
+  const actionItems = Array.isArray(raw.actionItems)
+    ? raw.actionItems.filter((a) => a && typeof a.title === 'string' && a.title.trim().length > 0)
+    : [];
+  const decisions = Array.isArray(raw.decisions)
+    ? raw.decisions.filter((d) => d && typeof d.text === 'string' && d.text.trim().length > 0)
+    : [];
+  const openDiscussions = Array.isArray(raw.openDiscussions)
+    ? raw.openDiscussions.filter((o) => o && typeof o.text === 'string' && o.text.trim().length > 0)
+    : [];
+  return {
+    actionItems: actionItems.map((a) => ({ ...a, confidence: clampConfidence(a.confidence, 0.8) })),
+    decisions: decisions.map((d) => ({ ...d, confidence: clampConfidence(d.confidence, 0.8) })),
+    openDiscussions: openDiscussions.map((o) => ({ ...o, confidence: clampConfidence(o.confidence, 0.75) })),
+  };
+}
+
 /**
  * Normalizes relative deadlines like "tomorrow", "Friday", "next Monday"
  * relative to a base date.
@@ -86,7 +318,6 @@ export function normalizeDeadlineToISO(phrase: string, baseDate = new Date()): s
   if (!phrase) return null;
   const p = phrase.toLowerCase().trim();
 
-  // If it's already YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(p)) {
     return p;
   }
@@ -108,9 +339,7 @@ export function normalizeDeadlineToISO(phrase: string, baseDate = new Date()): s
     if (p.includes(dayName)) {
       const currentDay = d.getDay();
       let diff = targetDay - currentDay;
-      if (p.includes('next ') && diff <= 0) {
-        diff += 7;
-      } else if (diff <= 0) {
+      if (diff <= 0) {
         diff += 7;
       }
       d.setDate(d.getDate() + diff);
@@ -133,24 +362,68 @@ export function normalizeDeadlineToISO(phrase: string, baseDate = new Date()): s
   return null;
 }
 
+const SEGMENT_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    actionItems: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          assignee: { type: Type.STRING, nullable: true },
+          deadlineText: { type: Type.STRING, nullable: true },
+          deadlineNormalized: { type: Type.STRING, nullable: true },
+          priority: { type: Type.STRING, enum: ['Low', 'Medium', 'High'] },
+          confidence: { type: Type.NUMBER },
+          sourceText: { type: Type.STRING },
+        },
+        required: ['title', 'priority', 'confidence'],
+      },
+    },
+    decisions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          text: { type: Type.STRING },
+          category: { type: Type.STRING, enum: ['Consensus', 'Sign-off Required', 'Architecture', 'Product'] },
+          confidence: { type: Type.NUMBER },
+          sourceText: { type: Type.STRING },
+        },
+        required: ['text', 'confidence'],
+      },
+    },
+    openDiscussions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          text: { type: Type.STRING },
+          confidence: { type: Type.NUMBER },
+          sourceText: { type: Type.STRING },
+        },
+        required: ['text', 'confidence'],
+      },
+    },
+  },
+  required: ['actionItems', 'decisions', 'openDiscussions'],
+};
+
 /**
  * Realtime segment analysis: analyzes a short window of transcript utterances
- * using Gemini 2.5 Flash to extract action items, decisions, and open discussions.
+ * using Gemini 3.6 Flash to extract action items, decisions, and open discussions.
+ * Falls back to heuristics ONLY when Gemini fails — and says so via `source`.
  */
 export async function analyzeTranscriptSegment(
   utterances: TranscriptUtterance[],
   context: SegmentAnalysisContext = {}
-): Promise<SegmentAnalysisResult> {
-  const client = getGeminiClient();
-  if (!client) {
-    return { actionItems: [], decisions: [], openDiscussions: [] };
-  }
-
+): Promise<SegmentAnalysisResponse> {
   const referenceDateStr = context.meetingDate || new Date().toISOString().split('T')[0];
   const participantsList = (context.participants || []).join(', ') || 'Unknown participants';
 
   const transcriptText = utterances
-    .map((u) => `[${u.timestamp || ''}] ${u.speaker}: ${u.text}`)
+    .map((u) => `[${u.timestamp || ''}] ${u.speakerName || u.speaker || 'Speaker'}: ${u.text}`)
     .join('\n');
 
   const prompt = `You are the MeetFlow AI real-time meeting intelligence engine.
@@ -187,113 +460,59 @@ Your task is to extract:
 
 CRITICAL RULES:
 - Never fabricate assignees, deadlines, or facts not present in the transcript.
-- If there are no action items, decisions, or open discussions in this snippet, return empty arrays.
-- Return strictly valid JSON conforming to the schema.`;
+- Never classify uncertain or tentative statements as confirmed decisions.
+- If there are no action items, decisions, or open discussions in this snippet, return empty arrays.`;
 
+  let geminiData: SegmentAnalysisResult;
   try {
-    const response = await client.models.generateContent({
-      model: 'gemini-2.5-flash',
+    geminiData = await callGeminiJson<SegmentAnalysisResult>({
       contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'object',
-          properties: {
-            actionItems: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  title: { type: 'string' },
-                  assignee: { type: 'string', nullable: true },
-                  deadlineText: { type: 'string', nullable: true },
-                  deadlineNormalized: { type: 'string', nullable: true },
-                  priority: { type: 'string', enum: ['Low', 'Medium', 'High'] },
-                  confidence: { type: 'number' },
-                  sourceText: { type: 'string' },
-                },
-                required: ['title', 'priority', 'confidence'],
-              },
-            },
-            decisions: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  text: { type: 'string' },
-                  category: { type: 'string', enum: ['Consensus', 'Sign-off Required', 'Architecture', 'Product'] },
-                  confidence: { type: 'number' },
-                  sourceText: { type: 'string' },
-                },
-                required: ['text', 'confidence'],
-              },
-            },
-            openDiscussions: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  text: { type: 'string' },
-                  confidence: { type: 'number' },
-                  sourceText: { type: 'string' },
-                },
-                required: ['text', 'confidence'],
-              },
-            },
-          },
-          required: ['actionItems', 'decisions', 'openDiscussions'],
-        },
-      },
+      responseSchema: SEGMENT_SCHEMA,
+      contextLabel: 'segment analysis',
     });
-
-    const rawJson = response.text || '{}';
-    const parsed = JSON.parse(rawJson) as SegmentAnalysisResult;
-
-    // Post-process fallback normalization for deadlines
-    if (Array.isArray(parsed.actionItems)) {
-      parsed.actionItems = parsed.actionItems.map((item) => {
-        let norm = item.deadlineNormalized;
-        if (!norm && item.deadlineText) {
-          norm = normalizeDeadlineToISO(item.deadlineText, new Date(referenceDateStr));
-        }
-        return {
-          ...item,
-          deadlineNormalized: norm,
-          id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        };
-      });
-    }
-
-    if (Array.isArray(parsed.decisions)) {
-      parsed.decisions = parsed.decisions.map((d) => ({
-        ...d,
-        id: `dec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      }));
-    }
-
-    if (Array.isArray(parsed.openDiscussions)) {
-      parsed.openDiscussions = parsed.openDiscussions.map((d) => ({
-        ...d,
-        id: `disc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      }));
-    }
-
-    return {
-      actionItems: parsed.actionItems || [],
-      decisions: parsed.decisions || [],
-      openDiscussions: parsed.openDiscussions || [],
-    };
   } catch (error) {
-    console.warn('[MeetFlow Gemini] Gemini API call failed, running heuristic extraction fallback:', error instanceof Error ? error.message : String(error));
-    return fallbackSegmentAnalysis(utterances, context, referenceDateStr);
+    const failure = toFailure(error);
+    console.warn(
+      `[MeetFlow Gemini] Segment analysis using HEURISTIC FALLBACK (${failure.kind}): ${failure.message}`
+    );
+    const fallback = fallbackSegmentAnalysis(utterances, context, referenceDateStr);
+    return {
+      ...fallback,
+      source: 'fallback',
+      model: 'heuristic',
+      fallbackReason: `gemini_${failure.kind}: ${failure.message}`,
+    };
   }
+
+  const clean = sanitizeSegmentResult(geminiData);
+  return {
+    ...clean,
+    source: 'gemini',
+    model: GEMINI_MODEL,
+    actionItems: withIds(clean.actionItems, 'act').map((item) => ({
+      ...item,
+      deadlineNormalized:
+        item.deadlineNormalized ||
+        (item.deadlineText ? normalizeDeadlineToISO(item.deadlineText, new Date(referenceDateStr)) : null),
+    })),
+    decisions: withIds(clean.decisions, 'dec'),
+    openDiscussions: withIds(clean.openDiscussions, 'disc'),
+  };
+}
+
+function withIds<T extends object>(items: T[], prefix: string): (T & { id: string })[] {
+  return items.map((item) => ({
+    ...item,
+    id: (item as { id?: string }).id || `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+  }));
 }
 
 /**
- * Heuristic fallback extraction when Gemini API is unreachable or responds with 401/429.
+ * Heuristic fallback extraction when Gemini is unreachable or permanently failing.
  * Extracts explicit commitments, decisions, and open discussions from the real transcript.
+ * Results are ALWAYS labeled with source: "fallback" by the callers.
  */
-function fallbackSegmentAnalysis(
+export function fallbackSegmentAnalysis(
   utterances: TranscriptUtterance[],
   context: SegmentAnalysisContext,
   referenceDateStr: string
@@ -305,11 +524,6 @@ function fallbackSegmentAnalysis(
   for (const u of utterances) {
     const text = u.text.trim();
     const lower = text.toLowerCase();
-
-    // 1. Action items
-    const actionMatch = lower.match(
-      /(?:i['’]ll|i will|let['’]s|we need to|can you|please|i will finish|i'll finish|complete)\s+([^.?!,;]+?)(?:\s+(?:by|before|on|until)\s+([^.?!,;]+))?$/i
-    );
 
     const deadlineKeywords = ['tomorrow', 'friday', 'monday', 'tuesday', 'wednesday', 'thursday', 'saturday', 'sunday', 'next week', 'end of week', 'end of day'];
     let deadlineText: string | null = null;
@@ -323,30 +537,28 @@ function fallbackSegmentAnalysis(
 
     if (
       lower.includes("i'll") ||
-      lower.includes("i will") ||
-      lower.includes("finish") ||
-      lower.includes("complete") ||
-      lower.includes("we need to") ||
-      lower.includes("action item")
+      lower.includes('i will') ||
+      lower.includes('finish') ||
+      lower.includes('complete') ||
+      lower.includes('we need to') ||
+      lower.includes('action item')
     ) {
       let task = text;
-      // Clean up common prefixes
       task = task.replace(/^(?:i'll|i will|we need to|please|can you|let's)\s+/i, '');
-      // Remove trailing deadline phrase from title
       if (deadlineText) {
         task = task.replace(new RegExp(`\\s+(?:by|before|on|until)\\s+${deadlineText}.*`, 'i'), '');
       }
       task = task.charAt(0).toUpperCase() + task.slice(1);
 
       let assignee: string | null = 'Unassigned';
-      if (lower.includes("i'll") || lower.includes("i will") || lower.includes("i am going to") || lower.includes("i'm going to")) {
+      if (lower.includes("i'll") || lower.includes('i will') || lower.includes('i am going to') || lower.includes("i'm going to")) {
         assignee = speaker || 'Unassigned';
       } else if (speaker && !lower.includes('unassigned')) {
         assignee = speaker;
       }
 
       actionItems.push({
-        id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `act-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         title: task.trim() || text,
         assignee,
         deadlineText,
@@ -357,7 +569,6 @@ function fallbackSegmentAnalysis(
       });
     }
 
-    // 2. Decisions
     if (
       lower.includes('decided') ||
       lower.includes('decision is') ||
@@ -370,7 +581,7 @@ function fallbackSegmentAnalysis(
       decText = decText.charAt(0).toUpperCase() + decText.slice(1);
 
       decisions.push({
-        id: `dec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `dec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         text: decText.trim() || text,
         category: 'Consensus',
         confidence: 0.94,
@@ -378,14 +589,14 @@ function fallbackSegmentAnalysis(
       });
     }
 
-    // 3. Open Discussions
     if (
-      lower.includes('should discuss') ||
+      /should\s+(?:we\s+)?(?:probably\s+)?discuss/.test(lower) ||
       lower.includes('discuss this later') ||
       lower.includes('need more input') ||
       lower.includes('revisit') ||
       lower.includes("haven't decided") ||
-      lower.includes('not sure yet')
+      lower.includes('not sure yet') ||
+      lower.includes('needs further discussion')
     ) {
       let discText = text.replace(/^(?:we should discuss|let['’]s discuss|we need to discuss|we need more input on|let['’]s revisit)\s+/i, '');
       discText = discText.replace(/(?:again|later)[.?!]?$/i, '').trim();
@@ -395,7 +606,7 @@ function fallbackSegmentAnalysis(
       }
 
       openDiscussions.push({
-        id: `disc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `disc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         text: discText.trim() || text,
         confidence: 0.88,
         sourceText: text,
@@ -406,11 +617,71 @@ function fallbackSegmentAnalysis(
   return { actionItems, decisions, openDiscussions };
 }
 
+const MEETING_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING },
+    summary: { type: Type.STRING },
+    actionItems: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          assignee: { type: Type.STRING, nullable: true },
+          deadlineText: { type: Type.STRING, nullable: true },
+          deadlineNormalized: { type: Type.STRING, nullable: true },
+          priority: { type: Type.STRING, enum: ['Low', 'Medium', 'High'] },
+          confidence: { type: Type.NUMBER },
+          sourceText: { type: Type.STRING },
+        },
+        required: ['title', 'priority', 'confidence'],
+      },
+    },
+    decisions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          text: { type: Type.STRING },
+          category: { type: Type.STRING, enum: ['Consensus', 'Sign-off Required', 'Architecture', 'Product'] },
+          confidence: { type: Type.NUMBER },
+          sourceText: { type: Type.STRING },
+        },
+        required: ['text', 'confidence'],
+      },
+    },
+    openDiscussions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          text: { type: Type.STRING },
+          confidence: { type: Type.NUMBER },
+          sourceText: { type: Type.STRING },
+        },
+        required: ['text', 'confidence'],
+      },
+    },
+    importantMoments: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          timestamp: { type: Type.STRING },
+          description: { type: Type.STRING },
+        },
+        required: ['description'],
+      },
+    },
+  },
+  required: ['title', 'summary', 'actionItems', 'decisions', 'openDiscussions'],
+};
 
 /**
  * Full meeting synthesis: called at the end of a meeting over the entire transcript.
  * Produces executive summary, consolidated deduplicated action items, decisions,
- * and open discussions.
+ * and open discussions. Falls back to heuristics ONLY on Gemini failure, labeled.
  */
 export async function analyzeFullMeeting(
   fullTranscript: string,
@@ -420,19 +691,8 @@ export async function analyzeFullMeeting(
     participants?: string[];
     date?: string;
   } = {}
-): Promise<FullMeetingAnalysisResult> {
-  const client = getGeminiClient();
+): Promise<FullMeetingAnalysisResponse> {
   const dateStr = metadata.date || new Date().toISOString().split('T')[0];
-
-  if (!client) {
-    return {
-      title: metadata.title || 'Live Meeting Analysis',
-      summary: 'Executive synthesis completed based on live transcript data.',
-      actionItems: [],
-      decisions: [],
-      openDiscussions: [],
-    };
-  }
 
   const prompt = `You are MeetFlow AI's executive meeting synthesizer.
 Analyze the complete transcript of the completed meeting and generate an executive summary,
@@ -453,127 +713,32 @@ ${fullTranscript || 'No speech recorded.'}
 Instructions:
 1. Title: Create an accurate, executive title reflecting the core focus of the meeting.
 2. Summary: Write a clear 2-4 sentence executive summary covering primary outcomes, agreements, and next steps.
-3. Action Items: Extract every distinct deliverable committed by participants.
+3. Action Items: Extract every distinct deliverable committed by participants. Consolidate duplicates.
    - Assignee: The responsible person or "Unassigned".
    - Deadline: Text and ISO normalized date YYYY-MM-DD relative to ${dateStr}.
    - Priority: "Low" | "Medium" | "High".
    - Confidence: 0.00 to 1.00.
+   - sourceText: exact supporting quote with speaker attribution.
 4. Decisions: Every key decision or consensus agreement reached.
 5. Open Discussions: Unresolved issues, debates, or future agenda items.
 
-Return strictly valid JSON.`;
+CRITICAL RULES:
+- Never fabricate assignees, deadlines, or facts not present in the transcript.
+- Never classify uncertain or tentative statements as confirmed decisions.`;
 
+  let geminiData: FullMeetingAnalysisResult;
   try {
-    const response = await client.models.generateContent({
-      model: 'gemini-2.5-flash',
+    geminiData = await callGeminiJson<FullMeetingAnalysisResult>({
       contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            summary: { type: 'string' },
-            actionItems: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  title: { type: 'string' },
-                  assignee: { type: 'string', nullable: true },
-                  deadlineText: { type: 'string', nullable: true },
-                  deadlineNormalized: { type: 'string', nullable: true },
-                  priority: { type: 'string', enum: ['Low', 'Medium', 'High'] },
-                  confidence: { type: 'number' },
-                  sourceText: { type: 'string' },
-                },
-                required: ['title', 'priority', 'confidence'],
-              },
-            },
-            decisions: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  text: { type: 'string' },
-                  category: { type: 'string', enum: ['Consensus', 'Sign-off Required', 'Architecture', 'Product'] },
-                  confidence: { type: 'number' },
-                  sourceText: { type: 'string' },
-                },
-                required: ['text', 'confidence'],
-              },
-            },
-            openDiscussions: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  text: { type: 'string' },
-                  confidence: { type: 'number' },
-                  sourceText: { type: 'string' },
-                },
-                required: ['text', 'confidence'],
-              },
-            },
-            importantMoments: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  timestamp: { type: 'string' },
-                  description: { type: 'string' },
-                },
-                required: ['description'],
-              },
-            },
-          },
-          required: ['title', 'summary', 'actionItems', 'decisions', 'openDiscussions'],
-        },
-      },
+      responseSchema: MEETING_SCHEMA,
+      contextLabel: 'full meeting synthesis',
     });
-
-    const parsed = JSON.parse(response.text || '{}') as FullMeetingAnalysisResult;
-
-    if (Array.isArray(parsed.actionItems)) {
-      parsed.actionItems = parsed.actionItems.map((item) => {
-        let norm = item.deadlineNormalized;
-        if (!norm && item.deadlineText) {
-          norm = normalizeDeadlineToISO(item.deadlineText, new Date(dateStr));
-        }
-        return {
-          ...item,
-          deadlineNormalized: norm,
-          id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        };
-      });
-    }
-
-    if (Array.isArray(parsed.decisions)) {
-      parsed.decisions = parsed.decisions.map((d) => ({
-        ...d,
-        id: `dec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      }));
-    }
-
-    if (Array.isArray(parsed.openDiscussions)) {
-      parsed.openDiscussions = parsed.openDiscussions.map((d) => ({
-        ...d,
-        id: `disc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      }));
-    }
-
-    return {
-      title: parsed.title || metadata.title || 'Meeting Analysis',
-      summary: parsed.summary || 'Summary generated by MeetFlow AI.',
-      actionItems: parsed.actionItems || [],
-      decisions: parsed.decisions || [],
-      openDiscussions: parsed.openDiscussions || [],
-      importantMoments: parsed.importantMoments || [],
-    };
   } catch (error) {
-    console.warn('[MeetFlow Gemini] Full meeting synthesis API failed, using intelligent synthesis fallback:', error instanceof Error ? error.message : String(error));
-    
-    // Parse transcript lines into utterances
+    const failure = toFailure(error);
+    console.warn(
+      `[MeetFlow Gemini] Full meeting synthesis using HEURISTIC FALLBACK (${failure.kind}): ${failure.message}`
+    );
+
     const lines = fullTranscript.split('\n').filter((l) => l.trim().length > 0);
     const utterances: TranscriptUtterance[] = lines.map((l) => {
       const match = l.match(/^(?:\[(.*?)\]\s*)?([^:]+):\s*(.*)$/);
@@ -599,7 +764,26 @@ Return strictly valid JSON.`;
       decisions: fallback.decisions,
       openDiscussions: fallback.openDiscussions,
       importantMoments: fallback.decisions.map((d) => ({ description: `Consensus reached: ${d.text}` })),
+      source: 'fallback' as const,
+      model: 'heuristic',
+      fallbackReason: `gemini_${failure.kind}: ${failure.message}`,
     };
   }
-}
 
+  const raw = (geminiData && typeof geminiData === 'object' ? geminiData : {}) as Partial<FullMeetingAnalysisResult>;
+  const clean = sanitizeSegmentResult(raw);
+  return {
+    title: (typeof raw.title === 'string' && raw.title.trim()) || metadata.title || 'Meeting Analysis',
+    summary: (typeof raw.summary === 'string' && raw.summary.trim()) || 'Summary generated by MeetFlow AI.',
+    actionItems: withIds(clean.actionItems, 'act').map((item) => ({
+      ...item,
+      deadlineNormalized:
+        item.deadlineNormalized || (item.deadlineText ? normalizeDeadlineToISO(item.deadlineText, new Date(dateStr)) : null),
+    })),
+    decisions: withIds(clean.decisions, 'dec'),
+    openDiscussions: withIds(clean.openDiscussions, 'disc'),
+    importantMoments: Array.isArray(raw.importantMoments) ? raw.importantMoments : [],
+    source: 'gemini' as const,
+    model: GEMINI_MODEL,
+  };
+}

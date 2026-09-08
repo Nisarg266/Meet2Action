@@ -24,6 +24,7 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
   onEndMeeting,
 }) => {
   const elapsedSeconds = useLiveMeetingStore((s) => s.elapsedSeconds);
+  const aiSource = useLiveMeetingStore((s) => s.aiSource);
   const addToast = useAppStore((s) => s.addToast);
   const navigate = useNavigate();
 
@@ -105,9 +106,36 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
           Transcript · Live
         </span>
 
-        <span className="hidden lg:inline-flex items-center gap-1.5 text-[10px] font-mono text-sky-300/90">
-          <Sparkles className={`w-3 h-3 ${aiStatus === 'analyzing' ? 'animate-pulse' : ''}`} />
-          AI · {aiStatus === 'analyzing' ? 'Analyzing' : aiStatus === 'listening' ? 'Listening' : 'Ready'}
+        <span
+          className={`hidden lg:inline-flex items-center gap-1.5 text-[10px] font-mono ${
+            aiStatus === 'error'
+              ? 'text-rose-300'
+              : aiStatus === 'analyzing'
+                ? 'text-sky-300/90'
+                : aiSource === 'gemini'
+                  ? 'text-sky-300/90'
+                  : aiSource === 'fallback'
+                    ? 'text-amber-300/90'
+                    : 'text-slate-400'
+          }`}
+        >
+          <Sparkles
+            className={`w-3 h-3 ${aiStatus === 'analyzing' ? 'animate-pulse' : ''} ${
+              aiStatus === 'error' ? 'text-rose-400' : aiSource === 'fallback' ? 'text-amber-400' : ''
+            }`}
+          />
+          AI ·{' '}
+          {aiStatus === 'analyzing'
+            ? 'Analyzing'
+            : aiStatus === 'error'
+              ? 'Error'
+              : aiSource === 'gemini'
+                ? 'Gemini'
+                : aiSource === 'fallback'
+                  ? 'Fallback'
+                  : aiStatus === 'listening'
+                    ? 'Listening'
+                    : 'Ready'}
         </span>
 
         <span
