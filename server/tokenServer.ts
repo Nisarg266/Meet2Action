@@ -1,4 +1,7 @@
 import express, { type Request, type Response } from 'express';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { AccessToken } from 'livekit-server-sdk';
 import dotenv from 'dotenv';
 import {
@@ -206,12 +209,49 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
 }
 
 
-/** Standalone express server (npm run server) — for production or non-Vite setups. */
+/** Standalone express server (npm run server) — for production on Render or containerized setups. */
 export function createLiveKitServer(): express.Express {
   const app = express();
-  app.use('/api', createLiveKitRouter(resolveLiveKitEnv()));
-  app.get('/healthz', (_req, res) => {
-    res.json({ ok: true, mode: isLiveKitEnvConfigured(resolveLiveKitEnv()) ? 'live' : 'demo' });
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const distPath = path.resolve(__dirname, '../dist');
+
+  // 1. Health check endpoint (Render uses /healthz)
+  app.get('/healthz', (_req: Request, res: Response) => {
+    res.status(200).json({
+      status: 'ok',
+      mode: isLiveKitEnvConfigured(resolveLiveKitEnv()) ? 'live' : 'demo',
+      geminiConfigured: isGeminiConfigured(),
+      timestamp: new Date().toISOString(),
+    });
   });
+
+  // 2. API Routes
+  app.use('/api', createLiveKitRouter(resolveLiveKitEnv()));
+
+  // 3. API 404 Handler - prevent unmatched /api/* from hitting SPA fallback
+  app.all('/api/*', (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'API route not found' });
+  });
+
+  // 4. Static assets from Vite production build
+  app.use(express.static(distPath));
+
+  // 5. React Router / SPA catch-all fallback for client-side deep links
+  app.get('*', (req: Request, res: Response) => {
+    if (req.path.startsWith('/api/')) {
+      return res.status(404).json({ error: 'API route not found' });
+    }
+
+    const indexPath = path.join(distPath, 'index.html');
+    if (!fs.existsSync(indexPath)) {
+      return res.status(503).send(
+        'Frontend build not found. Please run "npm run build" before starting the server.'
+      );
+    }
+
+    return res.sendFile(indexPath);
+  });
+
   return app;
 }
