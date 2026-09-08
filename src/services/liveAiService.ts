@@ -79,14 +79,27 @@ export interface LiveSegmentAnalysis {
   openDiscussion?: Decision;
 }
 
-const COMMITMENT_PATTERN =
+export const COMMITMENT_PATTERN =
   /\b(i'?ll|i\s+will|we'?ll|we\s+will|i\s+can|i'?m\s+going\s+to|i\s+am\s+going\s+to)\b/i;
 
-const DECISION_PATTERN =
+export const DECISION_PATTERN =
   /\b(we'?ve\s+decided|we\s+have\s+decided|we\s+decided|the\s+decision\s+is|it'?s\s+decided|we\s+all\s+agreed|we\s+agreed\s+to|let'?s\s+go\s+with|we'?re\s+launching|we\s+will\s+launch|approved)\b/i;
 
-const UNCERTAIN_PATTERN =
+export const UNCERTAIN_PATTERN =
   /\b(should\s+(we\s+)?(probably\s+)?discuss|needs?\s+further\s+discussion|need(s)?\s+to\s+be\s+discussed|open\s+question|not\s+sure\s+about|still\s+debatable|circle\s+back|revisit)\b/i;
+
+export const TRIVIAL_BANTER_PATTERN =
+  /^(hi|hello|hey|yes|yeah|yep|no|nope|okay|ok|sure|thanks|thank you|can you hear me|good morning|good afternoon|good evening|bye|see you)[\s.!?,]*$/i;
+
+export function hasActionOrDecisionIntent(text: string): boolean {
+  return COMMITMENT_PATTERN.test(text) || DECISION_PATTERN.test(text) || UNCERTAIN_PATTERN.test(text);
+}
+
+export function isTrivialBanter(text: string): boolean {
+  const clean = text.trim();
+  if (clean.length < 3) return true;
+  return TRIVIAL_BANTER_PATTERN.test(clean);
+}
 
 const TASK_VERBS = [
   'finish', 'complete', 'prepare', 'implement', 'send', 'review', 'fix', 'build',

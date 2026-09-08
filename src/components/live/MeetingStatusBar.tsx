@@ -25,6 +25,7 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
 }) => {
   const elapsedSeconds = useLiveMeetingStore((s) => s.elapsedSeconds);
   const aiSource = useLiveMeetingStore((s) => s.aiSource);
+  const transcriptStatus = useLiveMeetingStore((s) => s.transcriptStatus);
   const addToast = useAppStore((s) => s.addToast);
   const navigate = useNavigate();
 
@@ -101,9 +102,33 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
           {participantCount}
         </span>
 
-        <span className="hidden lg:inline-flex items-center gap-1.5 text-[10px] font-mono text-emerald-300/90">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          {mode === 'demo' ? 'Transcript · Demo' : 'Transcript: LiveKit STT'}
+        <span
+          className={`hidden lg:inline-flex items-center gap-1.5 text-[10px] font-mono ${
+            transcriptStatus === 'error'
+              ? 'text-rose-300'
+              : transcriptStatus === 'reconnecting'
+                ? 'text-amber-300'
+                : 'text-emerald-300/90'
+          }`}
+        >
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              transcriptStatus === 'error'
+                ? 'bg-rose-400'
+                : transcriptStatus === 'reconnecting'
+                  ? 'bg-amber-400 animate-ping'
+                  : 'bg-emerald-400 animate-pulse'
+            }`}
+          />
+          {mode === 'demo'
+            ? 'Transcript · Demo'
+            : transcriptStatus === 'connecting'
+              ? 'Transcript · Connecting'
+              : transcriptStatus === 'reconnecting'
+                ? 'Transcript · Reconnecting'
+                : transcriptStatus === 'error'
+                  ? 'Transcript · Error'
+                  : 'Transcript · Live'}
         </span>
 
         <span
@@ -133,9 +158,7 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
                 ? 'Gemini'
                 : aiSource === 'fallback'
                   ? 'Fallback'
-                  : aiStatus === 'listening'
-                    ? 'Listening'
-                    : 'Ready'}
+                  : 'Waiting'}
         </span>
 
         <span

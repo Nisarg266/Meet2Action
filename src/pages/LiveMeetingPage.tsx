@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Room, RoomEvent, RemoteParticipant, Track } from 'livekit-client';
+import { Room, RoomEvent, RemoteParticipant, Track, type TranscriptionSegment } from 'livekit-client';
 import { LiveKitRoom, useRoomContext, useLocalParticipant, useParticipants, RoomAudioRenderer } from '@livekit/components-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -27,7 +27,7 @@ import {
   formatDuration,
 } from '../store/liveMeetingStore';
 import { fetchLiveKitToken, getLocalIdentity, probeLiveKitStatus, type LiveKitTokenResponse } from '../services/livekitService';
-import { getPersona, LIVE_PERSONAS } from '../services/liveAiService';
+import { getPersona, LIVE_PERSONAS, hasActionOrDecisionIntent, isTrivialBanter } from '../services/liveAiService';
 import { startTranscriptSimulator, toTranscriptPayload, type SimulatorHandle } from '../services/transcriptSimulator';
 import { type ProcessingStep } from '../services/aiService';
 import { MeetingStatusBar } from '../components/live/MeetingStatusBar';
@@ -428,32 +428,32 @@ const MeetingShell: React.FC<MeetingShellProps> = ({
           {onSimulateSpeech && (
             <div className="bg-slate-900/90 border-t border-slate-800 px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
               <div className="flex items-center gap-1.5 overflow-x-auto text-[11px] text-slate-400 shrink-0">
-                <span className="font-mono font-semibold text-sky-400">Quick Test:</span>
+                <span className="font-mono font-semibold text-sky-400">Demo Test:</span>
                 <button
                   onClick={() => submitManualSpeech("I'll finish the landing page redesign by Friday.", localName)}
                   className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-md border border-slate-700 whitespace-nowrap cursor-pointer"
-                  title="Click to speak this commitment"
+                  title="Demo Test: Click to test action item extraction with this commitment"
                 >
                   "Finish landing page by Friday"
                 </button>
                 <button
                   onClick={() => submitManualSpeech("I will complete the payment API before Wednesday.", localName)}
                   className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-md border border-slate-700 whitespace-nowrap cursor-pointer"
-                  title="Click to speak this commitment"
+                  title="Demo Test: Click to test action item extraction with this commitment"
                 >
                   "Complete payment API by Wed"
                 </button>
                 <button
                   onClick={() => submitManualSpeech("We've decided to launch version 2 next Monday.", localName)}
                   className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-md border border-slate-700 whitespace-nowrap cursor-pointer"
-                  title="Click to speak this consensus decision"
+                  title="Demo Test: Click to test decision extraction with this consensus"
                 >
                   "Launch v2 next Monday"
                 </button>
                 <button
                   onClick={() => submitManualSpeech("We should discuss the pricing model again.", localName)}
                   className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-md border border-slate-700 whitespace-nowrap cursor-pointer"
-                  title="Click to open this discussion"
+                  title="Demo Test: Click to test open discussion extraction"
                 >
                   "Discuss pricing model"
                 </button>
@@ -511,142 +511,296 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
     names.forEach((name) => addParticipant(name));
   }, [participants, localName, setRoster, addParticipant]);
 
-  // Core Speech Processing & AI Pipeline
-  const processUtterance = React.useCallback(
-    async (text: string, speakerName?: string) => {
+  // -----------------------------------------------------------------
+  // DECOUPLED LOW-LATENCY REALTIME STT + GEMINI AI BATCH PIPELINE
+  // -----------------------------------------------------------------
+
+  // STT tracking map: segmentId -> timestamp when first partial was received
+  const sttTimestampsRef = React.useRef<Map<string, number>>(new Map());
+
+  // Decoupled AI Analysis Queue
+  const aiQueueRef = React.useRef<TranscriptMessage[]>([]);
+  const isAiAnalyzingRef = React.useRef(false);
+  const aiQueueTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const aiQueueStartedAtRef = React.useRef<number>(0);
+  const hasLoggedAiErrorRef = React.useRef(false);
+
+  // Decoupled AI Queue processing worker (max 1 concurrent Gemini call per meeting)
+  const flushAiAnalysisQueue = React.useCallback(async () => {
+    if (isAiAnalyzingRef.current) return;
+    if (aiQueueRef.current.length === 0) return;
+
+    // Clear debounce timer
+    if (aiQueueTimerRef.current) {
+      clearTimeout(aiQueueTimerRef.current);
+      aiQueueTimerRef.current = null;
+    }
+
+    // Take snapshot of current batch and clear queue
+    const batch = [...aiQueueRef.current];
+    aiQueueRef.current = [];
+
+    // Filter out batches that consist entirely of trivial chatter ("hello", "yes", "can you hear me")
+    const hasSubstance = batch.some((m) => !isTrivialBanter(m.text));
+    if (!hasSubstance) {
+      // Don't fire expensive/slow AI request for pure banter; transcript already saved!
+      return;
+    }
+
+    const queueDelayMs = aiQueueStartedAtRef.current ? Math.max(0, Date.now() - aiQueueStartedAtRef.current) : 0;
+    aiQueueStartedAtRef.current = 0;
+
+    isAiAnalyzingRef.current = true;
+    const store = useLiveMeetingStore.getState();
+    store.setAiStatus('analyzing');
+    const aiStartTime = Date.now();
+
+    try {
+      const response = await fetch('/api/ai/analyze-segment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          utterances: batch,
+          context: {
+            meetingId: store.meeting.id,
+            meetingTitle: store.meeting.title,
+            participants: store.roster,
+            meetingDate: new Date().toISOString().split('T')[0],
+          },
+        }),
+      });
+
+      const aiResponseMs = Date.now() - aiStartTime;
+      console.log(`[AI] queue=${queueDelayMs}ms response=${aiResponseMs}ms`);
+
+      if (response.ok) {
+        const analysis = await response.json();
+        const latest = useLiveMeetingStore.getState();
+        latest.setAiSource(analysis.source === 'gemini' ? 'gemini' : 'fallback');
+        hasLoggedAiErrorRef.current = false;
+
+        // Broadcast AI extraction results to peers via DataChannel
+        try {
+          if (room && room.state === 'connected') {
+            const payload = JSON.stringify({ type: 'ai-detection', analysis });
+            void room.localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true });
+          }
+        } catch {}
+
+        // Upsert action items (deduplicated by normalized title/assignee in store)
+        if (Array.isArray(analysis.actionItems)) {
+          analysis.actionItems.forEach((a: any) => {
+            latest.upsertActionItem({
+              id: a.id || `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              meetingId: latest.meeting.id,
+              meetingTitle: latest.meeting.title,
+              task: a.title,
+              assignee: a.assignee || 'Unassigned',
+              deadline: a.deadlineNormalized || a.deadlineText || null,
+              originalDeadlinePhrase: a.deadlineText || undefined,
+              priority: a.priority || 'Medium',
+              confidence: Math.round((a.confidence || 0.95) * 100),
+              status: 'todo',
+              sourceText: a.sourceText || batch.map((b) => b.text).join(' '),
+              isConfirmed: false,
+              createdAt: new Date().toISOString().split('T')[0],
+            });
+          });
+        }
+
+        // Upsert decisions (deduplicated by normalized text in store)
+        if (Array.isArray(analysis.decisions)) {
+          analysis.decisions.forEach((d: any) => {
+            latest.upsertDecision({
+              id: d.id || `dec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              meetingId: latest.meeting.id,
+              meetingTitle: latest.meeting.title,
+              text: d.text,
+              status: 'confirmed',
+              category: d.category || 'Consensus',
+              confidence: Math.round((d.confidence || 0.94) * 100),
+              sourceText: d.sourceText || batch.map((b) => b.text).join(' '),
+              createdAt: new Date().toISOString().split('T')[0],
+            });
+          });
+        }
+
+        // Upsert open discussions
+        if (Array.isArray(analysis.openDiscussions)) {
+          analysis.openDiscussions.forEach((o: any) => {
+            latest.upsertDecision({
+              id: o.id || `disc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              meetingId: latest.meeting.id,
+              meetingTitle: latest.meeting.title,
+              text: o.text,
+              status: 'open',
+              category: 'Unresolved Debate',
+              confidence: Math.round((o.confidence || 0.88) * 100),
+              sourceText: o.sourceText || batch.map((b) => b.text).join(' '),
+              createdAt: new Date().toISOString().split('T')[0],
+            });
+          });
+        }
+      } else {
+        console.warn(`[AI] analyze-segment HTTP ${response.status}`);
+        useLiveMeetingStore.getState().setAiStatus('error');
+      }
+    } catch (err) {
+      console.warn('[AI] Segment analysis error:', err);
+      useLiveMeetingStore.getState().setAiStatus('error');
+      if (!hasLoggedAiErrorRef.current) {
+        hasLoggedAiErrorRef.current = true;
+        // Non-blocking toast: meeting and transcript remain completely functional!
+        addToast('AI analysis temporarily delayed — realtime transcript continues', 'warning');
+      }
+    } finally {
+      isAiAnalyzingRef.current = false;
+      setTimeout(() => {
+        if (useLiveMeetingStore.getState().aiStatus !== 'error') {
+          useLiveMeetingStore.getState().setAiStatus('listening');
+        }
+      }, 1200);
+
+      // Drain queued items that arrived while the current request was in-flight
+      if (aiQueueRef.current.length > 0) {
+        void flushAiAnalysisQueue();
+      }
+    }
+  }, [room, addToast]);
+
+  // Enqueue utterance with intent-based intelligent debouncing
+  const enqueueAiUtterance = React.useCallback(
+    (utterance: TranscriptMessage) => {
+      if (!aiQueueStartedAtRef.current) {
+        aiQueueStartedAtRef.current = Date.now();
+      }
+      aiQueueRef.current.push(utterance);
+
+      const hasIntent = hasActionOrDecisionIntent(utterance.text);
+      const isTrivial = isTrivialBanter(utterance.text);
+
+      if (hasIntent) {
+        // High-intent statement ("I'll finish...", "We decided...") -> trigger rapidly (150ms debounce)
+        if (aiQueueTimerRef.current) clearTimeout(aiQueueTimerRef.current);
+        aiQueueTimerRef.current = setTimeout(() => {
+          void flushAiAnalysisQueue();
+        }, 150);
+      } else if (isTrivial) {
+        // Trivial banter ("hi", "can you hear me", "yes") -> wait up to 3500ms for real context
+        if (!aiQueueTimerRef.current) {
+          aiQueueTimerRef.current = setTimeout(() => {
+            void flushAiAnalysisQueue();
+          }, 3500);
+        }
+      } else {
+        // Conversational sentence -> trigger in 1800ms, or in 200ms if 2+ sentences accumulated
+        if (aiQueueRef.current.length >= 2) {
+          if (aiQueueTimerRef.current) clearTimeout(aiQueueTimerRef.current);
+          aiQueueTimerRef.current = setTimeout(() => {
+            void flushAiAnalysisQueue();
+          }, 200);
+        } else if (!aiQueueTimerRef.current) {
+          aiQueueTimerRef.current = setTimeout(() => {
+            void flushAiAnalysisQueue();
+          }, 1800);
+        }
+      }
+    },
+    [flushAiAnalysisQueue]
+  );
+
+  // Commit a final transcript message immediately to the store, broadcast to peers, then enqueue for AI
+  const commitFinalTranscript = React.useCallback(
+    (text: string, speakerName?: string, isLocal = true, customId?: string) => {
+      const cleanText = text.trim();
+      if (!cleanText) return;
+
       const speaker = speakerName || localName;
       const store = useLiveMeetingStore.getState();
+
       const utterance: TranscriptMessage = {
-        id: `tx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: customId || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         speaker,
         speakerRole: speaker === localName ? 'Host' : 'Participant',
-        text,
+        text: cleanText,
       };
 
+      // 1. Persist transcript IMMEDIATELY (independent of AI speed/state)
       store.addTranscriptMessage(utterance);
       store.addParticipant(speaker);
-      store.setAiStatus('analyzing');
+      store.setTranscriptStatus('live');
+      store.setCurrentInterim(null);
 
-      // 1. Broadcast transcript to peers via LiveKit DataChannel
-      try {
-        if (room && room.state === 'connected') {
+      // 2. Broadcast to LiveKit peers via DataChannel if local
+      if (isLocal && room && room.state === 'connected') {
+        try {
           const payload = JSON.stringify({ type: 'transcript', message: utterance });
-          await room.localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true });
+          void room.localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true });
+        } catch (err) {
+          console.warn('LiveKit DataChannel transcript broadcast error:', err);
         }
-      } catch (err) {
-        console.warn('LiveKit DataChannel transcript broadcast error:', err);
       }
 
-      // 2. Send transcript segment to server-side Gemini AI
-      try {
-        const response = await fetch('/api/ai/analyze-segment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            utterances: [utterance],
-            context: {
-              meetingId: store.meeting.id,
-              meetingTitle: store.meeting.title,
-              participants: store.roster,
-              meetingDate: new Date().toISOString().split('T')[0],
-            },
-          }),
-        });
-
-        if (response.ok) {
-          const analysis = await response.json();
-          const latest = useLiveMeetingStore.getState();
-
-          // Provenance: distinguish REAL Gemini results from heuristic fallback.
-          latest.setAiSource(analysis.source === 'gemini' ? 'gemini' : 'fallback');
-
-          // Broadcast AI detection to peers via DataChannel
-          try {
-            if (room && room.state === 'connected') {
-              const payload = JSON.stringify({ type: 'ai-detection', analysis });
-              void room.localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true });
-            }
-          } catch {}
-
-          // Upsert action items
-          if (Array.isArray(analysis.actionItems)) {
-            analysis.actionItems.forEach((a: any) => {
-              latest.upsertActionItem({
-                id: a.id || `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                meetingId: latest.meeting.id,
-                meetingTitle: latest.meeting.title,
-                task: a.title,
-                assignee: a.assignee || 'Unassigned',
-                deadline: a.deadlineNormalized || a.deadlineText || null,
-                originalDeadlinePhrase: a.deadlineText || undefined,
-                priority: a.priority || 'Medium',
-                confidence: Math.round((a.confidence || 0.95) * 100),
-                status: 'todo',
-                sourceText: a.sourceText || text,
-                isConfirmed: false,
-                createdAt: new Date().toISOString().split('T')[0],
-              });
-            });
-          }
-
-          // Upsert decisions
-          if (Array.isArray(analysis.decisions)) {
-            analysis.decisions.forEach((d: any) => {
-              latest.upsertDecision({
-                id: d.id || `dec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                meetingId: latest.meeting.id,
-                meetingTitle: latest.meeting.title,
-                text: d.text,
-                status: 'confirmed',
-                category: d.category || 'Consensus',
-                confidence: Math.round((d.confidence || 0.94) * 100),
-                sourceText: d.sourceText || text,
-                createdAt: new Date().toISOString().split('T')[0],
-              });
-            });
-          }
-
-          // Upsert open discussions
-          if (Array.isArray(analysis.openDiscussions)) {
-            analysis.openDiscussions.forEach((o: any) => {
-              latest.upsertDecision({
-                id: o.id || `disc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                meetingId: latest.meeting.id,
-                meetingTitle: latest.meeting.title,
-                text: o.text,
-                status: 'open',
-                category: 'Unresolved Debate',
-                confidence: Math.round((o.confidence || 0.88) * 100),
-                sourceText: o.sourceText || text,
-                createdAt: new Date().toISOString().split('T')[0],
-              });
-            });
-          }
-        }
-      } catch (err) {
-        console.warn('AI segment analysis error:', err);
-        useLiveMeetingStore.getState().setAiStatus('error');
-      } finally {
-        setTimeout(() => useLiveMeetingStore.getState().setAiStatus('listening'), 1800);
-      }
+      // 3. Enqueue into decoupled AI analysis worker
+      enqueueAiUtterance(utterance);
     },
-    [localName, room]
+    [localName, room, enqueueAiUtterance]
   );
 
-  // 1. Listen for Native LiveKit Room Transcription events (LiveKit Cloud / Agents)
+  // 1. LiveKit Realtime Streaming STT Listener (LiveKit Cloud / Agents / Inference)
   React.useEffect(() => {
     if (!room) return;
 
+    const store = useLiveMeetingStore.getState();
+    store.setTranscriptStatus('live');
+
     const handleTranscription = (
-      segments: Array<{ id: string; text: string; final: boolean }>,
+      segments: TranscriptionSegment[],
       participant?: any
     ) => {
       const speaker = participant?.name || participant?.identity || localName || 'Unknown Participant';
+      const isLocal = participant ? participant.isLocal : true;
+
       for (const seg of segments) {
-        if (seg.text && seg.text.trim()) {
-          if (seg.final) {
-            void processUtterance(seg.text.trim(), speaker);
+        if (!seg.text || !seg.text.trim()) continue;
+
+        const now = Date.now();
+        if (!sttTimestampsRef.current.has(seg.id)) {
+          sttTimestampsRef.current.set(seg.id, now);
+          const firstPartialMs = seg.startTime ? Math.max(0, now - seg.startTime) : 0;
+          if (firstPartialMs > 0) {
+            console.log(`[STT] firstPartial=${firstPartialMs}ms text="${seg.text.slice(0, 30)}..."`);
+          }
+        }
+
+        if (seg.final) {
+          const firstReceived = sttTimestampsRef.current.get(seg.id) || now;
+          const finalLatencyMs = Math.max(0, now - firstReceived);
+          console.log(`[STT] final=${finalLatencyMs}ms speaker="${speaker}" text="${seg.text.slice(0, 40)}"`);
+          sttTimestampsRef.current.delete(seg.id);
+
+          commitFinalTranscript(seg.text, speaker, isLocal, seg.id);
+        } else {
+          // Interim result: update temporary utterance in store without adding duplicate rows
+          useLiveMeetingStore.getState().setCurrentInterim({
+            id: seg.id,
+            speaker,
+            text: seg.text,
+            participantId: participant?.identity,
+          });
+
+          // Optional: broadcast interim speech to remote peers so they see live typing
+          if (isLocal && room && room.state === 'connected') {
+            try {
+              const payload = JSON.stringify({
+                type: 'interim-transcript',
+                speaker,
+                text: seg.text,
+                id: seg.id,
+              });
+              void room.localParticipant.publishData(new TextEncoder().encode(payload), { reliable: false });
+            } catch {}
           }
         }
       }
@@ -655,134 +809,72 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
     room.on(RoomEvent.TranscriptionReceived, handleTranscription);
     return () => {
       room.off(RoomEvent.TranscriptionReceived, handleTranscription);
+      if (aiQueueTimerRef.current) {
+        clearTimeout(aiQueueTimerRef.current);
+      }
     };
-  }, [room, localName, processUtterance]);
+  }, [room, localName, commitFinalTranscript]);
 
-  // 2. Realtime Server STT via LiveKit Audio Track (NO browser SpeechRecognition!)
-  // LiveKit is the SINGLE source of participant audio.
-  // We tap track.mediaStreamTrack directly from LiveKit without calling getUserMedia or browser speech.
+  // 2. LiveKit DataChannel / Text Stream Listener (topic 'lk.transcription' + peer sync)
   React.useEffect(() => {
-    if (!isMicrophoneEnabled || !room) return;
+    if (!room) return;
 
-    let cancelled = false;
-    let recorder: MediaRecorder | null = null;
-    let audioChunks: Blob[] = [];
+    const handleDataReceived = (
+      payload: Uint8Array,
+      participant?: RemoteParticipant,
+      _kind?: any,
+      topic?: string
+    ) => {
+      try {
+        const raw = new TextDecoder().decode(payload);
+        const json = JSON.parse(raw);
 
-    const publication = localParticipant.getTrackPublication(Track.Source.Microphone);
-    const mediaTrack = publication?.audioTrack?.mediaStreamTrack;
+        // Handle LiveKit text streams / agent transcription on topic 'lk.transcription'
+        if (topic === 'lk.transcription' || topic === 'transcription' || json.type === 'lk.transcription') {
+          const speaker =
+            json.speaker ||
+            json.participantName ||
+            json.participantIdentity ||
+            participant?.name ||
+            participant?.identity ||
+            'Unknown Participant';
+          const text = (json.text || '').trim();
+          if (!text) return;
 
-    if (!mediaTrack || typeof MediaRecorder === 'undefined') return;
-
-    try {
-      const stream = new MediaStream([mediaTrack]);
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-          ? 'audio/webm'
-          : 'audio/mp4';
-
-      recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 32000 });
-
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          audioChunks.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        if (cancelled || audioChunks.length === 0) return;
-        const blob = new Blob(audioChunks, { type: mimeType });
-        audioChunks = [];
-
-        // Only send if substantial audio was recorded (ignoring empty/tiny headers)
-        if (blob.size < 4000) {
-          if (!cancelled && isMicrophoneEnabled && recorder?.state === 'inactive') {
-            try {
-              recorder.start();
-              setTimeout(() => {
-                if (!cancelled && recorder?.state === 'recording') recorder.stop();
-              }, 4000);
-            } catch {}
+          const isFinal = Boolean(json.final || json.isFinal);
+          if (isFinal) {
+            commitFinalTranscript(text, speaker, false, json.id);
+          } else {
+            useLiveMeetingStore.getState().setCurrentInterim({
+              id: json.id || `interim-${speaker}`,
+              speaker,
+              text,
+              participantId: participant?.identity,
+            });
           }
           return;
         }
 
-        try {
-          const reader = new FileReader();
-          reader.onloadend = async () => {
-            if (cancelled) return;
-            const base64Data = (reader.result as string)?.split(',')[1];
-            if (!base64Data) return;
-
-            try {
-              const res = await fetch('/api/livekit/transcribe', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  audio: base64Data,
-                  mimeType,
-                  speaker: localName,
-                }),
-              });
-
-              if (res.ok) {
-                const data = await res.json();
-                if (data.text && data.text.trim()) {
-                  void processUtterance(data.text.trim(), localName);
-                }
-              }
-            } catch (err) {
-              console.warn('[MeetFlow STT] Server transcribe fetch warning:', err);
-            }
-          };
-          reader.readAsDataURL(blob);
-        } catch {}
-
-        // Schedule next recording slice while mic is enabled
-        if (!cancelled && isMicrophoneEnabled && recorder?.state === 'inactive') {
-          try {
-            recorder.start();
-            setTimeout(() => {
-              if (!cancelled && recorder?.state === 'recording') recorder.stop();
-            }, 4000);
-          } catch {}
-        }
-      };
-
-      // Start initial slice
-      recorder.start();
-      const initialTimer = setTimeout(() => {
-        if (!cancelled && recorder?.state === 'recording') recorder.stop();
-      }, 4000);
-
-      return () => {
-        cancelled = true;
-        clearTimeout(initialTimer);
-        if (recorder && recorder.state !== 'inactive') {
-          try {
-            recorder.stop();
-          } catch {}
-        }
-      };
-    } catch (e) {
-      console.warn('[MeetFlow STT] LiveKit audio recorder initialization note:', e);
-    }
-  }, [isMicrophoneEnabled, room, localParticipant, localName, processUtterance]);
-
-  // Listen for remote peer DataChannel messages (transcripts & AI sync)
-  React.useEffect(() => {
-    if (!room) return;
-
-    const handleDataReceived = (payload: Uint8Array, participant?: RemoteParticipant) => {
-      try {
-        const json = JSON.parse(new TextDecoder().decode(payload));
-
+        // Handle peer-broadcasted final transcript
         if (json.type === 'transcript' && json.message) {
           const store = useLiveMeetingStore.getState();
           store.addTranscriptMessage(json.message);
           store.addParticipant(json.message.speaker);
+          store.setCurrentInterim(null);
+          // Enqueue into AI queue (store deduplicates actions/decisions across peers)
+          enqueueAiUtterance(json.message);
+        } else if (json.type === 'interim-transcript' && json.speaker && json.text) {
+          // Remote peer interim typing/speech
+          useLiveMeetingStore.getState().setCurrentInterim({
+            id: json.id || `interim-${json.speaker}`,
+            speaker: json.speaker,
+            text: json.text,
+          });
         } else if (json.type === 'ai-detection' && json.analysis) {
+          // Remote peer broadcasted AI results
           const store = useLiveMeetingStore.getState();
+          store.setAiSource(json.analysis.source === 'gemini' ? 'gemini' : 'fallback');
+
           if (Array.isArray(json.analysis.actionItems)) {
             json.analysis.actionItems.forEach((a: any) => {
               store.upsertActionItem({
@@ -834,7 +926,7 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
           }
         }
       } catch (e) {
-        console.error('Error handling DataChannel message:', e);
+        console.warn('Error handling DataChannel message:', e);
       }
     };
 
@@ -842,7 +934,7 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
     return () => {
       room.off(RoomEvent.DataReceived, handleDataReceived);
     };
-  }, [room]);
+  }, [room, commitFinalTranscript, enqueueAiUtterance]);
 
   const guard = (action: Promise<unknown>) => {
     void action.catch((error: Error) => {
@@ -856,7 +948,7 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
       mode="live"
       connection={connection}
       stage={<VideoStage />}
-      onSimulateSpeech={processUtterance}
+      onSimulateSpeech={commitFinalTranscript}
       controls={
         <ControlBar
           mode="live"

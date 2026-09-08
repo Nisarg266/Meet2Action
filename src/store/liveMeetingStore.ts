@@ -9,6 +9,16 @@ export type AiStatus = 'listening' | 'analyzing' | 'idle' | 'error';
 /** Provenance of AI detections: real Gemini vs heuristic fallback. */
 export type AiSource = 'gemini' | 'fallback' | null;
 
+export interface InterimUtterance {
+  id?: string;
+  speaker: string;
+  text: string;
+  timestamp?: string;
+  participantId?: string;
+}
+
+export type TranscriptStatus = 'connecting' | 'live' | 'reconnecting' | 'error';
+
 export interface EnrichmentPayload {
   highlightEntities?: TranscriptMessage['highlightEntities'];
   associatedActionItemId?: string;
@@ -19,6 +29,8 @@ interface LiveMeetingState {
   phase: LivePhase;
   mode: LiveMode;
   connection: LiveConnectionState;
+  transcriptStatus: TranscriptStatus;
+  currentInterim: InterimUtterance | null;
   meeting: LiveMeeting;
   elapsedSeconds: number;
   aiStatus: AiStatus;
@@ -37,6 +49,8 @@ interface LiveMeetingState {
   setPhase: (phase: LivePhase) => void;
   setMode: (mode: LiveMode) => void;
   setConnection: (connection: LiveConnectionState) => void;
+  setTranscriptStatus: (status: TranscriptStatus) => void;
+  setCurrentInterim: (interim: InterimUtterance | null) => void;
   tick: () => void;
   setElapsed: (seconds: number) => void;
   setAiStatus: (status: AiStatus) => void;
@@ -80,10 +94,16 @@ const noUnread: Record<InsightTab, number> = {
   discussions: 0,
 };
 
+function cleanKey(str: string): string {
+  return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+}
+
 export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   phase: 'idle',
   mode: 'demo',
   connection: 'disconnected',
+  transcriptStatus: 'live',
+  currentInterim: null,
   meeting: emptyMeeting,
   elapsedSeconds: 0,
   aiStatus: 'listening',
@@ -100,6 +120,8 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   startMeeting: ({ roomName, title, identity, name }) =>
     set({
       phase: 'connecting',
+      transcriptStatus: 'connecting',
+      currentInterim: null,
       meeting: {
         id: `live-${Date.now().toString(36)}`,
         roomName,
@@ -126,6 +148,8 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   setPhase: (phase) => set({ phase }),
   setMode: (mode) => set({ mode }),
   setConnection: (connection) => set({ connection }),
+  setTranscriptStatus: (transcriptStatus) => set({ transcriptStatus }),
+  setCurrentInterim: (currentInterim) => set({ currentInterim }),
   setElapsed: (elapsedSeconds) => set({ elapsedSeconds }),
   setAiStatus: (aiStatus) => set({ aiStatus }),
   setAiSource: (aiSource) => set({ aiSource }),
@@ -175,37 +199,78 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
 
   upsertActionItem: (item) =>
     set((s) => {
-      const exists = s.meeting.actionItems.some((a) => a.id === item.id);
+      const targetKey = cleanKey(item.task);
+      const existingIndex = s.meeting.actionItems.findIndex(
+        (a) => a.id === item.id || (targetKey.length >= 4 && cleanKey(a.task) === targetKey)
+      );
+
+      let nextItems: ActionItem[];
+      let isNew = false;
+
+      if (existingIndex >= 0) {
+        const existing = s.meeting.actionItems[existingIndex];
+        const updated: ActionItem = {
+          ...item,
+          id: existing.id,
+          isConfirmed: existing.isConfirmed || item.isConfirmed,
+          confidence: Math.max(existing.confidence, item.confidence),
+          assignee: item.assignee && item.assignee !== 'Unassigned' ? item.assignee : existing.assignee,
+          deadline: item.deadline || existing.deadline,
+        };
+        nextItems = [...s.meeting.actionItems];
+        nextItems[existingIndex] = updated;
+      } else {
+        nextItems = [...s.meeting.actionItems, item];
+        isNew = true;
+      }
+
       return {
-        meeting: {
-          ...s.meeting,
-          actionItems: exists
-            ? s.meeting.actionItems.map((a) => (a.id === item.id ? item : a))
-            : [...s.meeting.actionItems, item],
-        },
+        meeting: { ...s.meeting, actionItems: nextItems },
         unread:
-          s.activeTab === 'actions' ? s.unread : { ...s.unread, actions: s.unread.actions + 1 },
+          isNew && s.activeTab !== 'actions'
+            ? { ...s.unread, actions: s.unread.actions + 1 }
+            : s.unread,
       };
     }),
 
   upsertDecision: (decision) =>
     set((s) => {
-      const exists = s.meeting.decisions.some((d) => d.id === decision.id);
+      const targetKey = cleanKey(decision.text);
       const isDiscussion = decision.status === 'open';
+      const existingIndex = s.meeting.decisions.findIndex(
+        (d) => d.id === decision.id || (targetKey.length >= 4 && cleanKey(d.text) === targetKey)
+      );
+
+      let nextDecisions: Decision[];
+      let isNew = false;
+
+      if (existingIndex >= 0) {
+        const existing = s.meeting.decisions[existingIndex];
+        const updated: Decision = {
+          ...decision,
+          id: existing.id,
+          status: existing.status === 'confirmed' ? 'confirmed' : decision.status,
+          confidence: Math.max(existing.confidence, decision.confidence),
+        };
+        nextDecisions = [...s.meeting.decisions];
+        nextDecisions[existingIndex] = updated;
+      } else {
+        nextDecisions = [...s.meeting.decisions, decision];
+        isNew = true;
+      }
+
       return {
-        meeting: {
-          ...s.meeting,
-          decisions: exists
-            ? s.meeting.decisions.map((d) => (d.id === decision.id ? decision : d))
-            : [...s.meeting.decisions, decision],
-        },
-        unread: isDiscussion
-          ? s.activeTab === 'discussions'
-            ? s.unread
-            : { ...s.unread, discussions: s.unread.discussions + 1 }
-          : s.activeTab === 'decisions'
-            ? s.unread
-            : { ...s.unread, decisions: s.unread.decisions + 1 },
+        meeting: { ...s.meeting, decisions: nextDecisions },
+        unread:
+          isNew
+            ? isDiscussion
+              ? s.activeTab === 'discussions'
+                ? s.unread
+                : { ...s.unread, discussions: s.unread.discussions + 1 }
+              : s.activeTab === 'decisions'
+                ? s.unread
+                : { ...s.unread, decisions: s.unread.decisions + 1 }
+            : s.unread,
       };
     }),
 

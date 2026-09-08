@@ -63,13 +63,14 @@ function renderHighlightedText(message: TranscriptMessage): React.ReactNode {
 
 const TranscriptFeed: React.FC = () => {
   const transcript = useLiveMeetingStore((s) => s.meeting.transcript);
+  const currentInterim = useLiveMeetingStore((s) => s.currentInterim);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [transcript.length]);
+  }, [transcript.length, currentInterim?.text]);
 
-  if (transcript.length === 0) {
+  if (transcript.length === 0 && !currentInterim?.text) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-14 text-center px-6">
         <AudioLines className="w-6 h-6 text-sky-400 animate-pulse" />
@@ -126,6 +127,28 @@ const TranscriptFeed: React.FC = () => {
             </motion.div>
           );
         })}
+
+        {currentInterim && currentInterim.text.trim() && (
+          <motion.div
+            key="current-interim-card"
+            layout
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="rounded-xl border border-dashed border-sky-400/80 bg-sky-50/50 p-3"
+          >
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-xs font-bold text-sky-900">{currentInterim.speaker}</span>
+              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium text-sky-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-ping" />
+                Speaking…
+              </span>
+            </div>
+            <p className="text-[13px] text-slate-700 italic leading-relaxed">
+              "{currentInterim.text}"
+            </p>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );

@@ -235,6 +235,8 @@ async function callGeminiJson<T>(params: {
   contents: string;
   responseSchema: Schema;
   contextLabel: string;
+  timeoutMs?: number;
+  maxAttempts?: number;
 }): Promise<T> {
   const client = getGeminiClient();
   if (!client) {
@@ -245,11 +247,14 @@ async function callGeminiJson<T>(params: {
     });
   }
 
+  const timeoutDuration = params.timeoutMs || REQUEST_TIMEOUT_MS;
+  const attemptsLimit = params.maxAttempts || MAX_ATTEMPTS;
+
   let lastFailure: GeminiFailure = { kind: 'server_error', retryable: true, message: 'unknown' };
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= attemptsLimit; attempt++) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), timeoutDuration);
 
     try {
       const response: GenerateContentResponse = await client.models.generateContent({
@@ -268,9 +273,9 @@ async function callGeminiJson<T>(params: {
       clearTimeout(timeout);
       lastFailure = classifyError(error);
 
-      const willRetry = lastFailure.retryable && attempt < MAX_ATTEMPTS;
+      const willRetry = lastFailure.retryable && attempt < attemptsLimit;
       console.warn(
-        `[MeetFlow Gemini] ${params.contextLabel} failed (${lastFailure.kind}, attempt ${attempt}/${MAX_ATTEMPTS})` +
+        `[MeetFlow Gemini] ${params.contextLabel} failed (${lastFailure.kind}, attempt ${attempt}/${attemptsLimit})` +
           (willRetry ? ' — retrying with backoff' : ' — giving up') +
           `: ${lastFailure.message}`
       );
@@ -278,7 +283,7 @@ async function callGeminiJson<T>(params: {
       if (!willRetry) {
         throw new GeminiCallError(lastFailure);
       }
-      const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 300);
+      const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 200);
       await new Promise((r) => setTimeout(r, backoff));
     }
   }
@@ -469,6 +474,8 @@ CRITICAL RULES:
       contents: prompt,
       responseSchema: SEGMENT_SCHEMA,
       contextLabel: 'segment analysis',
+      timeoutMs: 6000,
+      maxAttempts: 2,
     });
   } catch (error) {
     const failure = toFailure(error);
