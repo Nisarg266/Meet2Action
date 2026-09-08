@@ -1,0 +1,217 @@
+import express, { type Request, type Response } from 'express';
+import { AccessToken } from 'livekit-server-sdk';
+import dotenv from 'dotenv';
+import {
+  analyzeTranscriptSegment,
+  analyzeFullMeeting,
+  isGeminiConfigured,
+  type TranscriptUtterance,
+  type SegmentAnalysisContext,
+} from './geminiService';
+
+/**
+ * MeetFlow AI — LiveKit token endpoint.
+ *
+ * NEVER expose LIVEKIT_API_SECRET (or the API key) to the React frontend.
+ * The browser asks this endpoint for a short-lived, scoped participant token
+ * and receives only `{ serverUrl, participantToken }`.
+ *
+ * Env vars (loaded from .env / process environment):
+ *   LIVEKIT_URL        e.g. wss://your-project.livekit.cloud
+ *   LIVEKIT_API_KEY    project key
+ *   LIVEKIT_API_SECRET project secret (server-side only)
+ *
+ * When LiveKit is not configured the endpoint responds with `mode: "demo"`
+ * so the Live Meeting UI can fall back to Mock Mode without crashing.
+ */
+
+dotenv.config();
+
+export interface LiveKitEnv {
+  url: string;
+  apiKey: string;
+  apiSecret: string;
+}
+
+interface TokenRequestBody {
+  room?: unknown;
+  roomName?: unknown;
+  identity?: unknown;
+  participantIdentity?: unknown;
+  name?: unknown;
+  participantName?: unknown;
+}
+
+const ROOM_PATTERN = /^[a-zA-Z0-9_-]{3,64}$/;
+const TOKEN_TTL_SECONDS = 60 * 60 * 4; // 4 hours
+
+export function resolveLiveKitEnv(source: NodeJS.ProcessEnv = process.env): LiveKitEnv {
+  return {
+    url: (source.LIVEKIT_URL || '').trim(),
+    apiKey: (source.LIVEKIT_API_KEY || '').trim(),
+    apiSecret: (source.LIVEKIT_API_SECRET || '').trim(),
+  };
+}
+
+export function isLiveKitEnvConfigured(env: LiveKitEnv): boolean {
+  return Boolean(env.url && env.apiKey && env.apiSecret);
+}
+
+function sanitize(value: unknown, fallback: string, maxLength = 64): string {
+  if (typeof value !== 'string') return fallback;
+  const clean = value.replace(/[^a-zA-Z0-9_: .-]/g, '').trim();
+  return (clean || fallback).slice(0, maxLength);
+}
+
+function randomId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Creates the /livekit/* API app. A full express instance (not a bare Router)
+ * so req/res are properly augmented when mounted as middleware inside the
+ * Vite dev server as well as standalone.
+ */
+export function createLiveKitRouter(env: LiveKitEnv): express.Express {
+  const app = express();
+
+  app.use(express.json({ limit: '32kb' }));
+
+  const handleTokenRequest = async (req: Request, res: Response) => {
+    const body: TokenRequestBody = (req.body && typeof req.body === 'object' ? req.body : {}) as TokenRequestBody;
+    const rawRoom = body.roomName ?? body.room ?? req.query.roomName ?? req.query.room;
+    const room = typeof rawRoom === 'string' ? rawRoom.trim() : '';
+
+    if (!ROOM_PATTERN.test(room)) {
+      res.status(400).json({
+        error: 'invalid_room',
+        message: 'Room name must be 3-64 characters (letters, numbers, "-" or "_").',
+      });
+      return;
+    }
+
+    if (!isLiveKitEnvConfigured(env)) {
+      // Mock Mode: no LiveKit server configured — the frontend renders the
+      // simulated meeting experience instead of connecting.
+      res.status(200).json({
+        mode: 'demo' as const,
+        serverUrl: '',
+        participantToken: '',
+        room,
+        reason: 'LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET are not configured on the server.',
+      });
+      return;
+    }
+
+    try {
+      const rawIdentity = body.participantIdentity ?? body.identity;
+      const rawName = body.participantName ?? body.name;
+      const identity = sanitize(rawIdentity, randomId('user'), 64);
+      const displayName = sanitize(rawName, identity, 64);
+
+      const token = new AccessToken(env.apiKey, env.apiSecret, {
+        identity,
+        name: displayName,
+        ttl: TOKEN_TTL_SECONDS,
+      });
+      token.addGrant({
+        room,
+        roomJoin: true,
+        canPublish: true,
+        canPublishData: true,
+        canSubscribe: true,
+      });
+
+      const participantToken = await token.toJwt();
+
+      res.status(200).json({
+        mode: 'live' as const,
+        serverUrl: env.url,
+        participantToken,
+        room,
+        identity,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: 'token_error',
+        message: 'Failed to mint LiveKit participant token.',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  app.post('/livekit/token', handleTokenRequest);
+  app.get('/livekit/token', handleTokenRequest);
+
+  app.get('/livekit/status', (_req: Request, res: Response) => {
+    res.status(200).json({
+      mode: isLiveKitEnvConfigured(env) ? ('live' as const) : ('demo' as const),
+    });
+  });
+
+  app.get('/ai/status', (_req: Request, res: Response) => {
+    res.status(200).json({
+      configured: isGeminiConfigured(),
+      model: 'gemini-2.5-flash',
+    });
+  });
+
+  app.post('/ai/analyze-segment', async (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      const utterances: TranscriptUtterance[] = Array.isArray(body.utterances)
+        ? body.utterances
+        : body.utterance
+        ? [body.utterance]
+        : [];
+
+      if (!utterances.length) {
+        res.status(200).json({ actionItems: [], decisions: [], openDiscussions: [] });
+        return;
+      }
+
+      const context: SegmentAnalysisContext = body.context || {};
+      const result = await analyzeTranscriptSegment(utterances, context);
+      res.status(200).json(result);
+    } catch (error) {
+      console.error('[MeetFlow] /ai/analyze-segment error:', error);
+      res.status(500).json({
+        error: 'ai_error',
+        message: 'Failed to analyze transcript segment.',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post('/ai/analyze-meeting', async (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      const rawTranscript = body.transcript ?? body.fullTranscript;
+      const transcript = typeof rawTranscript === 'string' ? rawTranscript : '';
+      const metadata = body.metadata || {};
+
+      const result = await analyzeFullMeeting(transcript, metadata);
+      res.status(200).json(result);
+    } catch (error) {
+      console.error('[MeetFlow] /ai/analyze-meeting error:', error);
+      res.status(500).json({
+        error: 'ai_error',
+        message: 'Failed to synthesize complete meeting.',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  return app;
+}
+
+
+/** Standalone express server (npm run server) — for production or non-Vite setups. */
+export function createLiveKitServer(): express.Express {
+  const app = express();
+  app.use('/api', createLiveKitRouter(resolveLiveKitEnv()));
+  app.get('/healthz', (_req, res) => {
+    res.json({ ok: true, mode: isLiveKitEnvConfigured(resolveLiveKitEnv()) ? 'live' : 'demo' });
+  });
+  return app;
+}

@@ -5,8 +5,7 @@ import {
   LayoutDashboard,
   Video,
   CalendarPlus,
-  LogIn,
-  Disc,
+  Radio,
   CheckSquare,
   KanbanSquare,
   MessageSquare,
@@ -52,10 +51,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'MEETINGS',
       items: [
         { name: 'All Meetings', path: '/meetings', icon: Video },
-        { name: 'Analyze Meeting', path: '/analyze', icon: Sparkles, badge: 'AI', badgeColor: 'bg-sky-100 text-sky-700' },
+        { name: 'Start Live Meeting', path: '/live-meeting', icon: Radio, badge: 'LIVE', badgeColor: 'bg-rose-100 text-rose-700' },
+        { name: 'Analyze Transcript', path: '/analyze', icon: Sparkles, badge: 'AI', badgeColor: 'bg-sky-100 text-sky-700' },
         { name: 'Schedule Meeting', path: '/schedule', icon: CalendarPlus },
-        { name: 'Join Meeting', path: '/meetings/meet-q4-strategy', icon: LogIn },
-        { name: 'Recordings', path: '/meetings', icon: Disc },
       ],
     },
     {

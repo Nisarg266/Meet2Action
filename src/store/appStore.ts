@@ -1,6 +1,32 @@
 import { create } from 'zustand';
 import { ActionItem, Decision, Meeting, TaskStatus } from '../types';
-import { initialActionItems, initialDecisions, mockMeetings } from '../data/mockMeetings';
+
+const STORAGE_KEYS = {
+  MEETINGS: 'meetflow_real_meetings',
+  ACTION_ITEMS: 'meetflow_real_action_items',
+  DECISIONS: 'meetflow_real_decisions',
+  NOTIFICATIONS: 'meetflow_notifications',
+};
+
+function loadStorage<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error(`Failed to load ${key} from localStorage:`, e);
+  }
+  return fallback;
+}
+
+function saveStorage<T>(key: string, data: T): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (e) {
+    console.error(`Failed to save ${key} to localStorage:`, e);
+  }
+}
 
 export interface ToastMessage {
   id: string;
@@ -39,6 +65,7 @@ interface AppState {
   notifications: AppNotification[];
   markAllNotificationsRead: () => void;
   dismissNotification: (id: string) => void;
+  addNotification: (notif: Omit<AppNotification, 'id' | 'read'>) => void;
 
   // Actions
   setActiveMeetingId: (id: string) => void;
@@ -62,16 +89,24 @@ interface AppState {
   addMeeting: (meeting: Meeting) => void;
   updateMeeting: (id: string, updates: Partial<Meeting>) => void;
 
+  // Clear / Reset
+  clearWorkspaceData: () => void;
+
   // Toasts
   addToast: (message: string, type?: ToastMessage['type']) => void;
   removeToast: (id: string) => void;
 }
 
+const initialMeetings = loadStorage<Meeting[]>(STORAGE_KEYS.MEETINGS, []);
+const initialActions = loadStorage<ActionItem[]>(STORAGE_KEYS.ACTION_ITEMS, []);
+const initialDecs = loadStorage<Decision[]>(STORAGE_KEYS.DECISIONS, []);
+const initialNotifs = loadStorage<AppNotification[]>(STORAGE_KEYS.NOTIFICATIONS, []);
+
 export const useAppStore = create<AppState>((set) => ({
-  meetings: mockMeetings,
-  actionItems: initialActionItems,
-  decisions: initialDecisions,
-  activeMeetingId: 'meet-q4-strategy',
+  meetings: initialMeetings,
+  actionItems: initialActions,
+  decisions: initialDecs,
+  activeMeetingId: initialMeetings.length > 0 ? initialMeetings[0].id : '',
   toasts: [],
   isSearchModalOpen: false,
   searchQuery: '',
@@ -81,56 +116,35 @@ export const useAppStore = create<AppState>((set) => ({
   setShowSplash: (val: boolean) => set({ showSplash: val }),
 
   // Workspace State
-  currentWorkspace: 'Acme Corp · Product Team',
+  currentWorkspace: 'MeetFlow AI · Operations',
   setCurrentWorkspace: (ws: string) => set({ currentWorkspace: ws }),
 
   // Notifications
-  notifications: [
-    {
-      id: 'notif-1',
-      title: 'Action Item Completed',
-      description: 'Amit Shah marked "Complete payment API integration" as done.',
-      timestamp: '10m ago',
-      type: 'action',
-      read: false,
-      link: '/action-items',
-    },
-    {
-      id: 'notif-2',
-      title: 'Consensus Decision Approved',
-      description: 'Release v2.0 next Monday confirmed with 100% lead quorum.',
-      timestamp: '35m ago',
-      type: 'decision',
-      read: false,
-      link: '/decisions',
-    },
-    {
-      id: 'notif-3',
-      title: 'Review Required (<70% Confidence)',
-      description: 'Pricing tier compliance item flagged for Alex Mercer review.',
-      timestamp: '1h ago',
-      type: 'action',
-      read: false,
-      link: '/action-items?filter=review',
-    },
-    {
-      id: 'notif-4',
-      title: 'New Session Analyzed',
-      description: 'Q4 Product Strategy & Sprint Planning transcript processed.',
-      timestamp: '2h ago',
-      type: 'meeting',
-      read: true,
-      link: '/meetings/meet-q4-strategy',
-    },
-  ],
+  notifications: initialNotifs,
   markAllNotificationsRead: () =>
-    set((state) => ({
-      notifications: state.notifications.map((n) => ({ ...n, read: true })),
-    })),
+    set((state) => {
+      const updated = state.notifications.map((n) => ({ ...n, read: true }));
+      saveStorage(STORAGE_KEYS.NOTIFICATIONS, updated);
+      return { notifications: updated };
+    }),
   dismissNotification: (id) =>
-    set((state) => ({
-      notifications: state.notifications.filter((n) => n.id !== id),
-    })),
+    set((state) => {
+      const updated = state.notifications.filter((n) => n.id !== id);
+      saveStorage(STORAGE_KEYS.NOTIFICATIONS, updated);
+      return { notifications: updated };
+    }),
+  addNotification: (notif) =>
+    set((state) => {
+      const item: AppNotification = {
+        ...notif,
+        id: `notif-${Date.now()}`,
+        read: false,
+      };
+      const updated = [item, ...state.notifications];
+      saveStorage(STORAGE_KEYS.NOTIFICATIONS, updated);
+      return { notifications: updated };
+    }),
+
 
   setActiveMeetingId: (id) => set({ activeMeetingId: id }),
 
@@ -143,13 +157,14 @@ export const useAppStore = create<AppState>((set) => ({
       const updated = state.actionItems.map((item) =>
         item.id === id ? { ...item, status } : item
       );
-      // Also update in corresponding meeting
       const updatedMeetings = state.meetings.map((meeting) => ({
         ...meeting,
         actionItems: meeting.actionItems.map((item) =>
           item.id === id ? { ...item, status } : item
         ),
       }));
+      saveStorage(STORAGE_KEYS.ACTION_ITEMS, updated);
+      saveStorage(STORAGE_KEYS.MEETINGS, updatedMeetings);
       return { actionItems: updated, meetings: updatedMeetings };
     });
   },
@@ -170,6 +185,9 @@ export const useAppStore = create<AppState>((set) => ({
           item.id === id ? { ...item, isConfirmed: true, confidence: Math.max(item.confidence, 95) } : item
         ),
       }));
+
+      saveStorage(STORAGE_KEYS.ACTION_ITEMS, updated);
+      saveStorage(STORAGE_KEYS.MEETINGS, updatedMeetings);
 
       const newToasts = [
         ...state.toasts,
@@ -192,6 +210,9 @@ export const useAppStore = create<AppState>((set) => ({
         ...meeting,
         actionItems: meeting.actionItems.filter((item) => item.id !== id),
       }));
+
+      saveStorage(STORAGE_KEYS.ACTION_ITEMS, updated);
+      saveStorage(STORAGE_KEYS.MEETINGS, updatedMeetings);
 
       const newToasts = [
         ...state.toasts,
@@ -218,6 +239,9 @@ export const useAppStore = create<AppState>((set) => ({
         ),
       }));
 
+      saveStorage(STORAGE_KEYS.ACTION_ITEMS, updated);
+      saveStorage(STORAGE_KEYS.MEETINGS, updatedMeetings);
+
       const newToasts = [
         ...state.toasts,
         {
@@ -237,17 +261,21 @@ export const useAppStore = create<AppState>((set) => ({
       id: `act-${Date.now()}`,
       createdAt: new Date().toISOString().split('T')[0],
     };
-    set((state) => ({
-      actionItems: [newItem, ...state.actionItems],
-      toasts: [
-        ...state.toasts,
-        {
-          id: `toast-${Date.now()}`,
-          message: `Created action item: "${newItem.task}"`,
-          type: 'success',
-        },
-      ],
-    }));
+    set((state) => {
+      const updated = [newItem, ...state.actionItems];
+      saveStorage(STORAGE_KEYS.ACTION_ITEMS, updated);
+      return {
+        actionItems: updated,
+        toasts: [
+          ...state.toasts,
+          {
+            id: `toast-${Date.now()}`,
+            message: `Created action item: "${newItem.task}"`,
+            type: 'success',
+          },
+        ],
+      };
+    });
   },
 
   confirmDecision: (id) => {
@@ -261,6 +289,10 @@ export const useAppStore = create<AppState>((set) => ({
           dec.id === id ? { ...dec, status: 'confirmed' as const, quorumStatus: '100% Consensus' } : dec
         ),
       }));
+
+      saveStorage(STORAGE_KEYS.DECISIONS, updated);
+      saveStorage(STORAGE_KEYS.MEETINGS, updatedMeetings);
+
       return {
         decisions: updated,
         meetings: updatedMeetings,
@@ -277,23 +309,29 @@ export const useAppStore = create<AppState>((set) => ({
   },
 
   rejectDecision: (id) => {
-    set((state) => ({
-      decisions: state.decisions.filter((d) => d.id !== id),
-      toasts: [
-        ...state.toasts,
-        {
-          id: `toast-${Date.now()}`,
-          message: 'Decision proposal rejected',
-          type: 'info',
-        },
-      ],
-    }));
+    set((state) => {
+      const updated = state.decisions.filter((d) => d.id !== id);
+      saveStorage(STORAGE_KEYS.DECISIONS, updated);
+      return {
+        decisions: updated,
+        toasts: [
+          ...state.toasts,
+          {
+            id: `toast-${Date.now()}`,
+            message: 'Decision proposal rejected',
+            type: 'info',
+          },
+        ],
+      };
+    });
   },
 
   updateDecisionStatus: (id, status) => {
-    set((state) => ({
-      decisions: state.decisions.map((d) => (d.id === id ? { ...d, status } : d)),
-    }));
+    set((state) => {
+      const updated = state.decisions.map((d) => (d.id === id ? { ...d, status } : d));
+      saveStorage(STORAGE_KEYS.DECISIONS, updated);
+      return { decisions: updated };
+    });
   },
 
   addDecision: (decision) => {
@@ -302,42 +340,74 @@ export const useAppStore = create<AppState>((set) => ({
       id: `dec-${Date.now()}`,
       createdAt: new Date().toISOString().split('T')[0],
     };
-    set((state) => ({
-      decisions: [newDecision, ...state.decisions],
-      toasts: [
-        ...state.toasts,
-        {
-          id: `toast-${Date.now()}`,
-          message: 'New decision added to record',
-          type: 'success',
-        },
-      ],
-    }));
+    set((state) => {
+      const updated = [newDecision, ...state.decisions];
+      saveStorage(STORAGE_KEYS.DECISIONS, updated);
+      return {
+        decisions: updated,
+        toasts: [
+          ...state.toasts,
+          {
+            id: `toast-${Date.now()}`,
+            message: 'New decision added to record',
+            type: 'success',
+          },
+        ],
+      };
+    });
   },
 
   addMeeting: (meeting) => {
-    set((state) => ({
-      meetings: [meeting, ...state.meetings],
-      // Also add its action items and decisions into the global list
-      actionItems: [...meeting.actionItems, ...state.actionItems],
-      decisions: [...meeting.decisions, ...state.decisions],
-      activeMeetingId: meeting.id,
-      toasts: [
-        ...state.toasts,
-        {
-          id: `toast-${Date.now()}`,
-          message: `Meeting "${meeting.title}" analyzed successfully. ${meeting.actionItems.length} action items extracted.`,
-          type: 'success',
-        },
-      ],
-    }));
+    set((state) => {
+      const updatedMeetings = [meeting, ...state.meetings];
+      const updatedActions = [...meeting.actionItems, ...state.actionItems];
+      const updatedDecisions = [...meeting.decisions, ...state.decisions];
+
+      saveStorage(STORAGE_KEYS.MEETINGS, updatedMeetings);
+      saveStorage(STORAGE_KEYS.ACTION_ITEMS, updatedActions);
+      saveStorage(STORAGE_KEYS.DECISIONS, updatedDecisions);
+
+      return {
+        meetings: updatedMeetings,
+        actionItems: updatedActions,
+        decisions: updatedDecisions,
+        activeMeetingId: meeting.id,
+        toasts: [
+          ...state.toasts,
+          {
+            id: `toast-${Date.now()}`,
+            message: `Meeting "${meeting.title}" analyzed successfully. ${meeting.actionItems.length} action items extracted.`,
+            type: 'success',
+          },
+        ],
+      };
+    });
   },
 
   updateMeeting: (id, updates) => {
-    set((state) => ({
-      meetings: state.meetings.map((m) => (m.id === id ? { ...m, ...updates } : m)),
-    }));
+    set((state) => {
+      const updated = state.meetings.map((m) => (m.id === id ? { ...m, ...updates } : m));
+      saveStorage(STORAGE_KEYS.MEETINGS, updated);
+      return { meetings: updated };
+    });
   },
+
+  clearWorkspaceData: () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(STORAGE_KEYS.MEETINGS);
+      localStorage.removeItem(STORAGE_KEYS.ACTION_ITEMS);
+      localStorage.removeItem(STORAGE_KEYS.DECISIONS);
+      localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
+    }
+    set({
+      meetings: [],
+      actionItems: [],
+      decisions: [],
+      notifications: [],
+      activeMeetingId: '',
+    });
+  },
+
 
   addToast: (message, type = 'info') => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;

@@ -246,55 +246,76 @@ export const Dashboard: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            {meetings.map((meeting, index) => (
-              <motion.div
-                key={meeting.id}
-                initial={{ opacity: 0, y: 15 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.3, delay: index * 0.06 }}
-                whileHover={{ scale: 1.008, transition: { duration: 0.15 } }}
-                onClick={() => navigate(`/meetings/${meeting.id}`)}
-                className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-2xs hover:shadow-md hover:border-slate-300 transition-all cursor-pointer group"
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                      <h4 className="text-sm sm:text-base font-semibold text-slate-900 truncate group-hover:text-sky-700 transition-colors">
-                        {meeting.title}
-                      </h4>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-slate-500">
-                      <span>{meeting.date}</span>
-                      <span>·</span>
-                      <span className="font-mono">{meeting.durationFormatted || `${meeting.duration} mins`}</span>
-                      <span>·</span>
-                      <span className="flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5 text-slate-400" />
-                        {meeting.participants.length} attendees
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
-                    <span className="text-xs font-mono font-medium px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
-                      {meeting.actionItems.length} tasks
-                    </span>
-                    <span className="text-xs font-mono font-medium px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200">
-                      Analyzed
-                    </span>
-                    <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-sky-600 group-hover:translate-x-1 transition-all" />
-                  </div>
+            {meetings.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-3 shadow-2xs">
+                <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-100 flex items-center justify-center mx-auto text-[#006194]">
+                  <Video className="w-6 h-6" />
                 </div>
+                <h4 className="text-base font-bold text-slate-900 font-display">Your meetings will appear here</h4>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Start a Live Meeting with real audio, video, and screen sharing, or analyze a meeting transcript to extract action items.
+                </p>
+                <div className="pt-2">
+                  <button
+                    onClick={() => navigate('/live-meeting')}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl transition-all cursor-pointer shadow-xs"
+                  >
+                    <Video className="w-3.5 h-3.5" />
+                    Start Live Meeting
+                  </button>
+                </div>
+              </div>
+            ) : (
+              meetings.map((meeting, index) => (
+                <motion.div
+                  key={meeting.id}
+                  initial={{ opacity: 0, y: 15 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 0.3, delay: index * 0.06 }}
+                  whileHover={{ scale: 1.008, transition: { duration: 0.15 } }}
+                  onClick={() => navigate(`/meetings/${meeting.id}`)}
+                  className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-2xs hover:shadow-md hover:border-slate-300 transition-all cursor-pointer group"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                        <h4 className="text-sm sm:text-base font-semibold text-slate-900 truncate group-hover:text-sky-700 transition-colors">
+                          {meeting.title}
+                        </h4>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-slate-500">
+                        <span>{meeting.date}</span>
+                        <span>·</span>
+                        <span className="font-mono">{meeting.durationFormatted || `${meeting.duration} mins`}</span>
+                        <span>·</span>
+                        <span className="flex items-center gap-1">
+                          <Users className="w-3.5 h-3.5 text-slate-400" />
+                          {meeting.participants.length} attendees
+                        </span>
+                      </div>
+                    </div>
 
-                {meeting.summary && (
-                  <p className="text-xs text-slate-600 mt-3 pt-3 border-t border-slate-100 line-clamp-2 leading-relaxed">
-                    {meeting.summary}
-                  </p>
-                )}
-              </motion.div>
-            ))}
+                    <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+                      <span className="text-xs font-mono font-medium px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
+                        {meeting.actionItems.length} tasks
+                      </span>
+                      <span className="text-xs font-mono font-medium px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        Analyzed
+                      </span>
+                      <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-sky-600 group-hover:translate-x-1 transition-all" />
+                    </div>
+                  </div>
+
+                  {meeting.summary && (
+                    <p className="text-xs text-slate-600 mt-3 pt-3 border-t border-slate-100 line-clamp-2 leading-relaxed">
+                      {meeting.summary}
+                    </p>
+                  )}
+                </motion.div>
+              ))
+            )}
           </div>
         </motion.div>
 
@@ -317,62 +338,70 @@ export const Dashboard: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            {/* Pending Decisions notice */}
-            {pendingDecisions.slice(0, 1).map((dec) => (
-              <motion.div
-                key={dec.id}
-                whileHover={{ scale: 1.01 }}
-                onClick={() => navigate('/decisions')}
-                className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/40 hover:bg-amber-50/70 transition-all cursor-pointer space-y-2 shadow-2xs"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-800">
-                    Voting Sign-off Required
-                  </span>
-                  <span className="text-xs font-mono text-amber-700 font-semibold">48h left</span>
-                </div>
-                <h5 className="text-xs font-semibold text-slate-900 leading-snug">
-                  {dec.text}
-                </h5>
-                <p className="text-[11px] text-slate-600">
-                  Alex Mercer review requested before sprint lock.
-                </p>
-              </motion.div>
-            ))}
+            {needsAttentionTasks.length === 0 && pendingDecisions.length === 0 ? (
+              <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-2xs text-center space-y-1.5">
+                <ShieldCheck className="w-7 h-7 text-emerald-500 mx-auto" />
+                <p className="text-xs font-semibold text-slate-800">All clear — no items need attention</p>
+                <p className="text-[11px] text-slate-400">Tasks with low confidence or pending review will show here.</p>
+              </div>
+            ) : (
+              <>
+                {/* Pending Decisions notice */}
+                {pendingDecisions.slice(0, 1).map((dec) => (
+                  <motion.div
+                    key={dec.id}
+                    whileHover={{ scale: 1.01 }}
+                    onClick={() => navigate('/decisions')}
+                    className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/40 hover:bg-amber-50/70 transition-all cursor-pointer space-y-2 shadow-2xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-800">
+                        Voting Sign-off Required
+                      </span>
+                      <span className="text-xs font-mono text-amber-700 font-semibold">48h left</span>
+                    </div>
+                    <h5 className="text-xs font-semibold text-slate-900 leading-snug">
+                      {dec.text}
+                    </h5>
+                  </motion.div>
+                ))}
 
-            {/* Low confidence or unconfirmed tasks */}
-            {needsAttentionTasks.slice(0, 3).map((task) => (
-              <motion.div
-                key={task.id}
-                whileHover={{ scale: 1.01 }}
-                className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2"
-              >
-                <div className="flex items-center justify-between gap-1">
-                  <span className="text-xs font-semibold text-slate-900 line-clamp-1">
-                    {task.task}
-                  </span>
-                  <PriorityBadge priority={task.priority} size="sm" />
-                </div>
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <div className="flex items-center gap-1.5">
-                    <Avatar name={task.assignee || 'Unassigned'} size="xs" src={task.assigneeAvatar} />
-                    <span>{task.assignee || 'Unassigned'}</span>
-                  </div>
-                  <span className="font-mono text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded text-[11px]">
-                    {task.confidence}% Needs Review
-                  </span>
-                </div>
-              </motion.div>
-            ))}
+                {/* Low confidence or unconfirmed tasks */}
+                {needsAttentionTasks.slice(0, 3).map((task) => (
+                  <motion.div
+                    key={task.id}
+                    whileHover={{ scale: 1.01 }}
+                    className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-xs font-semibold text-slate-900 line-clamp-1">
+                        {task.task}
+                      </span>
+                      <PriorityBadge priority={task.priority} size="sm" />
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                      <div className="flex items-center gap-1.5">
+                        <Avatar name={task.assignee || 'Unassigned'} size="xs" src={task.assigneeAvatar} />
+                        <span>{task.assignee || 'Unassigned'}</span>
+                      </div>
+                      <span className="font-mono text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded text-[11px]">
+                        {task.confidence}% Needs Review
+                      </span>
+                    </div>
+                  </motion.div>
+                ))}
 
-            <button
-              onClick={() => navigate('/action-items?filter=review')}
-              className="w-full text-center py-2.5 px-3 bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 rounded-xl transition-colors cursor-pointer"
-            >
-              Review all pending items &rarr;
-            </button>
+                <button
+                  onClick={() => navigate('/action-items?filter=review')}
+                  className="w-full text-center py-2.5 px-3 bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 rounded-xl transition-colors cursor-pointer"
+                >
+                  Review all pending items &rarr;
+                </button>
+              </>
+            )}
           </div>
         </motion.div>
+
       </div>
     </motion.div>
   );

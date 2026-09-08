@@ -283,7 +283,30 @@ export const ActionItems: React.FC = () => {
       </div>
 
       {/* Main Items Display */}
-      {viewMode === 'cards' ? (
+      {filteredItems.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center max-w-lg mx-auto space-y-3 shadow-2xs">
+          <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-100 flex items-center justify-center mx-auto text-[#006194]">
+            <CheckSquare className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-slate-900 font-display">
+            {hasActiveFilters ? 'No matching action items' : 'No action items yet'}
+          </h3>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto">
+            {hasActiveFilters
+              ? 'No items match your active search or filters. Try clearing them to see all items.'
+              : 'Action items extracted by Gemini during live video sessions will appear here automatically.'}
+          </p>
+          <div className="pt-2">
+            <button
+              onClick={() => setIsAddModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl transition-all cursor-pointer shadow-xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Action Item</span>
+            </button>
+          </div>
+        </div>
+      ) : viewMode === 'cards' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredItems.map((item, idx) => (
             <motion.div
@@ -305,28 +328,8 @@ export const ActionItems: React.FC = () => {
         />
       )}
 
-      {/* Empty State */}
-      {filteredItems.length === 0 && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center max-w-md mx-auto space-y-3">
-          <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
-            <CheckSquare className="w-6 h-6" />
-          </div>
-          <h4 className="text-base font-bold text-slate-900 font-display">
-            No action items match your filters
-          </h4>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            Try adjusting search terms or resetting the assignee and confidence filters to view the full ledger.
-          </p>
-          <button
-            onClick={handleResetFilters}
-            className="text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-3 py-1.5 rounded-lg hover:bg-sky-100 transition-colors"
-          >
-            Clear all filters
-          </button>
-        </div>
-      )}
-
       {/* Add Task Modal */}
+
       <Modal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}

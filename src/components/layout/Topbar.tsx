@@ -6,6 +6,7 @@ import {
   Search,
   Plus,
   LogIn,
+  Radio,
   Bell,
   Menu,
   Building2,
@@ -19,6 +20,7 @@ import {
   RotateCcw
 } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
+import { generateRoomName } from '../../services/livekitService';
 
 interface TopbarProps {
   onMobileMenuClick: () => void;
@@ -197,22 +199,23 @@ export const Topbar: React.FC<TopbarProps> = ({ onMobileMenuClick }) => {
           <Search className="w-4 h-4" />
         </button>
 
-        {/* Join Meeting button */}
+        {/* Join Meeting button — lobby with room code */}
         <button
-          onClick={() => navigate('/meetings/meet-q4-strategy')}
+          onClick={() => navigate('/live-meeting')}
           className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-colors cursor-pointer"
         >
           <LogIn className="w-3.5 h-3.5 text-slate-500" />
           <span>Join Meeting</span>
         </button>
 
-        {/* New Meeting Primary CTA button */}
+        {/* Start Live Meeting Primary CTA — generates a unique room instantly */}
         <button
-          onClick={() => navigate('/schedule')}
+          onClick={() => navigate(`/live-meeting/${generateRoomName()}`)}
           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl shadow-2xs hover:shadow-xs transition-all cursor-pointer"
         >
-          <Plus className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">New Meeting</span>
+          <Radio className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Start Live Meeting</span>
+          <span className="sm:hidden">Live</span>
         </button>
 
         {/* Interactive Notifications Center */}

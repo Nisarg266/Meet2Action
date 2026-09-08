@@ -24,6 +24,10 @@ import { Contacts } from './pages/Contacts';
 import { CalendarView } from './pages/CalendarView';
 import { IntegrationsHub } from './pages/IntegrationsHub';
 import { HelpCenter } from './pages/HelpCenter';
+import { LiveMeetingLobby } from './pages/LiveMeetingLobby';
+const LiveMeetingPage = React.lazy(() =>
+  import('./pages/LiveMeetingPage').then((m) => ({ default: m.LiveMeetingPage }))
+);
 
 export default function App() {
   const { showSplash, setShowSplash } = useAppStore();
@@ -37,9 +41,29 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <AppLayout>
-        <Routes>
+      <Routes>
+        {/* Live meeting room is a standalone immersive route (no app shell) */}
+        <Route
+          path="/live-meeting/:roomId"
+          element={
+            <React.Suspense fallback={null}>
+              <LiveMeetingPage />
+            </React.Suspense>
+          }
+        />
+        <Route
+          path="/meet/:roomId"
+          element={
+            <React.Suspense fallback={null}>
+              <LiveMeetingPage />
+            </React.Suspense>
+          }
+        />
+
+        {/* App shell routes */}
+        <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/live-meeting" element={<LiveMeetingLobby />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/meetings" element={<Meetings />} />
           <Route path="/meetings/:id" element={<MeetingDetail />} />
@@ -60,8 +84,8 @@ export default function App() {
           <Route path="/help" element={<HelpCenter />} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
-      </AppLayout>
+        </Route>
+      </Routes>
 
       {/* Global Modals & Toast notifications */}
       <GlobalSearchModal />

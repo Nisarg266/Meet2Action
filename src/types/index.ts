@@ -93,10 +93,30 @@ export interface Meeting {
   decisions: Decision[];
   summary: string;
   status: MeetingStatus;
-  platform?: 'Google Meet' | 'Zoom' | 'MS Teams' | 'In-Person';
+  platform?: 'Google Meet' | 'Zoom' | 'MS Teams' | 'In-Person' | 'LiveKit';
   meetingUrl?: string;
   isRecording?: boolean;
   recordingDuration?: string;
+}
+
+/**
+ * Working record for an in-progress LiveKit meeting.
+ * Persisted into the regular Meeting model when the session ends.
+ */
+export interface LiveMeeting {
+  id: string;
+  roomName: string;
+  title: string;
+  startedAt: string; // ISO timestamp
+  endedAt?: string;
+  participants: string[];
+  transcript: TranscriptMessage[];
+  actionItems: ActionItem[];
+  decisions: Decision[];
+  /** Convenience view of decisions with status 'open' (unresolved debates). */
+  openDiscussions?: Decision[];
+  /** 'live' = connected to a real LiveKit room, 'demo' = simulated mock mode. */
+  mode?: 'live' | 'demo';
 }
 
 export interface FilterOptions {

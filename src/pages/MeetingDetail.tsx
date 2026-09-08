@@ -27,7 +27,28 @@ export const MeetingDetail: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'studio' | 'actions' | 'decisions' | 'transcript' | 'summary'>('studio');
   const [highlightedTranscriptMsgId, setHighlightedTranscriptMsgId] = useState<string | undefined>(undefined);
 
-  const meeting = meetings.find((m) => m.id === id) || meetings[0];
+  const meeting = meetings.find((m) => m.id === id);
+
+  if (!meeting) {
+    return (
+      <div className="p-12 max-w-lg mx-auto text-center space-y-4">
+        <div className="w-14 h-14 rounded-2xl bg-sky-50 border border-sky-100 flex items-center justify-center mx-auto text-[#006194]">
+          <Video className="w-7 h-7" />
+        </div>
+        <h3 className="text-xl font-bold text-slate-900 font-display">Meeting Not Found</h3>
+        <p className="text-xs text-slate-500">
+          No meeting session was found with ID "{id}". It may have been cleared or not yet saved.
+        </p>
+        <button
+          onClick={() => navigate('/meetings')}
+          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl transition-all cursor-pointer shadow-xs"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Return to Meetings
+        </button>
+      </div>
+    );
+  }
 
   const meetingActions = actionItems.filter((i) => i.meetingId === meeting.id);
   const meetingDecisions = decisions.filter((d) => d.meetingId === meeting.id);

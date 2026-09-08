@@ -228,7 +228,26 @@ export const Decisions: React.FC = () => {
       </div>
 
       {/* Decision Sections */}
-      {activeFilterTab === 'all' && !search ? (
+      {decisions.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center max-w-lg mx-auto space-y-3 shadow-2xs">
+          <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-100 flex items-center justify-center mx-auto text-[#006194]">
+            <ShieldCheck className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-slate-900 font-display">No decisions logged yet</h3>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto">
+            Consensus and key governance choices detected by Gemini AI during live meetings will be tracked here.
+          </p>
+          <div className="pt-2">
+            <button
+              onClick={() => setIsLogModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl transition-all cursor-pointer shadow-xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Log Decision</span>
+            </button>
+          </div>
+        </div>
+      ) : activeFilterTab === 'all' && !search ? (
         <div className="space-y-8">
           {/* Section 1: Confirmed Organizational Decisions */}
           <div className="space-y-3.5">
