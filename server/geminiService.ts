@@ -787,3 +787,42 @@ CRITICAL RULES:
     model: GEMINI_MODEL,
   };
 }
+
+/**
+ * Transcribes audio chunk using Gemini multimodal audio capability.
+ * Returns the transcribed text string or empty string if silent/error.
+ */
+export async function transcribeAudio(audioBase64: string, mimeType: string = 'audio/webm'): Promise<string> {
+  if (!isGeminiConfigured() || !audioBase64) return '';
+
+  const client = getGeminiClient();
+  if (!client) return '';
+
+  try {
+    const cleanMime = (mimeType || 'audio/webm').split(';')[0].trim();
+    const response = await client.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                data: audioBase64,
+                mimeType: cleanMime,
+              },
+            },
+            {
+              text: 'Transcribe the spoken English in this audio snippet accurately. Output ONLY the transcribed words with normal punctuation. If the audio is silent or unintelligible noise, output nothing.',
+            },
+          ],
+        },
+      ],
+    });
+
+    return (response.text || '').trim();
+  } catch (err) {
+    console.warn('[MeetFlow STT] Audio transcription error:', err instanceof Error ? err.message : String(err));
+    return '';
+  }
+}

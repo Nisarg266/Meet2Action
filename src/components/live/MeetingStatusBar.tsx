@@ -103,7 +103,7 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
 
         <span className="hidden lg:inline-flex items-center gap-1.5 text-[10px] font-mono text-emerald-300/90">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          Transcript · Live
+          {mode === 'demo' ? 'Transcript · Demo' : 'Transcript: LiveKit STT'}
         </span>
 
         <span

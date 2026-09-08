@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Room, RoomEvent, RemoteParticipant } from 'livekit-client';
-import { LiveKitRoom, useRoomContext, useLocalParticipant, useParticipants } from '@livekit/components-react';
+import { Room, RoomEvent, RemoteParticipant, Track } from 'livekit-client';
+import { LiveKitRoom, useRoomContext, useLocalParticipant, useParticipants, RoomAudioRenderer } from '@livekit/components-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Radio,
@@ -113,9 +113,11 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
 
     async function startPreview() {
       try {
+        // Video preview only in lobby: NEVER capture audio in the lobby to prevent
+        // Android / mobile Chrome microphone hardware locks before LiveKit connects.
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: isCameraActive,
-          audio: isMicActive,
+          video: isCameraActive ? true : false,
+          audio: false,
         });
         if (!active) {
           stream.getTracks().forEach((t) => t.stop());
@@ -632,65 +634,140 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
     [localName, room]
   );
 
-  // Real Web Speech API listener when microphone is enabled
+  // 1. Listen for Native LiveKit Room Transcription events (LiveKit Cloud / Agents)
   React.useEffect(() => {
-    if (!isMicrophoneEnabled) return;
+    if (!room) return;
 
-    const SpeechRec =
-      typeof window !== 'undefined'
-        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-        : null;
-
-    if (!SpeechRec) return;
-
-    let recognition: any = null;
-    let cancelled = false;
-
-    try {
-      recognition = new SpeechRec();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-
-      recognition.onresult = (event: any) => {
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            const transcript = event.results[i][0].transcript.trim();
-            if (transcript) {
-              void processUtterance(transcript);
-            }
+    const handleTranscription = (
+      segments: Array<{ id: string; text: string; final: boolean }>,
+      participant?: any
+    ) => {
+      const speaker = participant?.name || participant?.identity || localName || 'Unknown Participant';
+      for (const seg of segments) {
+        if (seg.text && seg.text.trim()) {
+          if (seg.final) {
+            void processUtterance(seg.text.trim(), speaker);
           }
         }
-      };
+      }
+    };
 
-      recognition.onerror = (event: any) => {
-        if (event.error !== 'no-speech') {
-          console.warn('SpeechRecognition error:', event.error);
+    room.on(RoomEvent.TranscriptionReceived, handleTranscription);
+    return () => {
+      room.off(RoomEvent.TranscriptionReceived, handleTranscription);
+    };
+  }, [room, localName, processUtterance]);
+
+  // 2. Realtime Server STT via LiveKit Audio Track (NO browser SpeechRecognition!)
+  // LiveKit is the SINGLE source of participant audio.
+  // We tap track.mediaStreamTrack directly from LiveKit without calling getUserMedia or browser speech.
+  React.useEffect(() => {
+    if (!isMicrophoneEnabled || !room) return;
+
+    let cancelled = false;
+    let recorder: MediaRecorder | null = null;
+    let audioChunks: Blob[] = [];
+
+    const publication = localParticipant.getTrackPublication(Track.Source.Microphone);
+    const mediaTrack = publication?.audioTrack?.mediaStreamTrack;
+
+    if (!mediaTrack || typeof MediaRecorder === 'undefined') return;
+
+    try {
+      const stream = new MediaStream([mediaTrack]);
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : 'audio/mp4';
+
+      recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 32000 });
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunks.push(e.data);
         }
       };
 
-      recognition.onend = () => {
-        if (!cancelled && isMicrophoneEnabled) {
+      recorder.onstop = async () => {
+        if (cancelled || audioChunks.length === 0) return;
+        const blob = new Blob(audioChunks, { type: mimeType });
+        audioChunks = [];
+
+        // Only send if substantial audio was recorded (ignoring empty/tiny headers)
+        if (blob.size < 4000) {
+          if (!cancelled && isMicrophoneEnabled && recorder?.state === 'inactive') {
+            try {
+              recorder.start();
+              setTimeout(() => {
+                if (!cancelled && recorder?.state === 'recording') recorder.stop();
+              }, 4000);
+            } catch {}
+          }
+          return;
+        }
+
+        try {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            if (cancelled) return;
+            const base64Data = (reader.result as string)?.split(',')[1];
+            if (!base64Data) return;
+
+            try {
+              const res = await fetch('/api/livekit/transcribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  audio: base64Data,
+                  mimeType,
+                  speaker: localName,
+                }),
+              });
+
+              if (res.ok) {
+                const data = await res.json();
+                if (data.text && data.text.trim()) {
+                  void processUtterance(data.text.trim(), localName);
+                }
+              }
+            } catch (err) {
+              console.warn('[MeetFlow STT] Server transcribe fetch warning:', err);
+            }
+          };
+          reader.readAsDataURL(blob);
+        } catch {}
+
+        // Schedule next recording slice while mic is enabled
+        if (!cancelled && isMicrophoneEnabled && recorder?.state === 'inactive') {
           try {
-            recognition.start();
+            recorder.start();
+            setTimeout(() => {
+              if (!cancelled && recorder?.state === 'recording') recorder.stop();
+            }, 4000);
           } catch {}
         }
       };
 
-      recognition.start();
-    } catch (e) {
-      console.warn('Failed to start speech recognition:', e);
-    }
+      // Start initial slice
+      recorder.start();
+      const initialTimer = setTimeout(() => {
+        if (!cancelled && recorder?.state === 'recording') recorder.stop();
+      }, 4000);
 
-    return () => {
-      cancelled = true;
-      if (recognition) {
-        try {
-          recognition.stop();
-        } catch {}
-      }
-    };
-  }, [isMicrophoneEnabled, processUtterance]);
+      return () => {
+        cancelled = true;
+        clearTimeout(initialTimer);
+        if (recorder && recorder.state !== 'inactive') {
+          try {
+            recorder.stop();
+          } catch {}
+        }
+      };
+    } catch (e) {
+      console.warn('[MeetFlow STT] LiveKit audio recorder initialization note:', e);
+    }
+  }, [isMicrophoneEnabled, room, localParticipant, localName, processUtterance]);
 
   // Listen for remote peer DataChannel messages (transcripts & AI sync)
   React.useEffect(() => {
@@ -1266,6 +1343,7 @@ export const LiveMeetingPage: React.FC = () => {
             setDemoFallbackReason(error.message);
           }}
         >
+          <RoomAudioRenderer />
           <LiveRoomInner {...shellPanels} />
         </LiveKitRoom>
       ) : (

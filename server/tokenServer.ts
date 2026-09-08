@@ -9,6 +9,7 @@ import {
   analyzeFullMeeting,
   isGeminiConfigured,
   GEMINI_MODEL,
+  transcribeAudio,
   type TranscriptUtterance,
   type SegmentAnalysisContext,
 } from './geminiService';
@@ -151,6 +152,31 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
     res.status(200).json({
       mode: isLiveKitEnvConfigured(env) ? ('live' as const) : ('demo' as const),
     });
+  });
+
+  app.post('/livekit/transcribe', async (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      const audioData = typeof body.audio === 'string' ? body.audio : '';
+      const mimeType = typeof body.mimeType === 'string' ? body.mimeType : 'audio/webm';
+      const speaker = typeof body.speaker === 'string' ? body.speaker : 'Unknown Participant';
+
+      if (!audioData) {
+        res.status(400).json({ error: 'invalid_audio', message: 'Missing base64 audio payload.' });
+        return;
+      }
+
+      const text = await transcribeAudio(audioData, mimeType);
+      res.status(200).json({
+        text,
+        speaker,
+        timestamp: new Date().toISOString(),
+        sttEngine: 'livekit-gemini-stt',
+      });
+    } catch (error) {
+      console.error('[MeetFlow STT] Transcribe error:', error);
+      res.status(500).json({ error: 'stt_error', message: 'Failed to transcribe audio.' });
+    }
   });
 
   app.get('/ai/status', (_req: Request, res: Response) => {
