@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { motion } from 'motion/react';
 import { useAppStore } from '../store/appStore';
 import { ActionItemCard } from '../components/action-items/ActionItemCard';
 import { ActionItemTable } from '../components/action-items/ActionItemTable';
@@ -110,7 +111,12 @@ export const ActionItems: React.FC = () => {
     search || selectedAssignee !== 'all' || selectedPriority !== 'all' || selectedStatus !== 'all' || confidenceMin > 0;
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6"
+    >
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -279,8 +285,17 @@ export const ActionItems: React.FC = () => {
       {/* Main Items Display */}
       {viewMode === 'cards' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredItems.map((item) => (
-            <ActionItemCard key={item.id} item={item} />
+          {filteredItems.map((item, idx) => (
+            <motion.div
+              key={item.id}
+              initial={{ opacity: 0, y: 14 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.3, delay: idx * 0.05 }}
+              whileHover={{ y: -2, transition: { duration: 0.15 } }}
+            >
+              <ActionItemCard item={item} />
+            </motion.div>
           ))}
         </div>
       ) : (
@@ -400,6 +415,6 @@ export const ActionItems: React.FC = () => {
           item={editingItem}
         />
       )}
-    </div>
+    </motion.div>
   );
 };

@@ -24,14 +24,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         <Topbar onMobileMenuClick={() => setIsMobileMenuOpen(true)} />
 
-        <main className="flex-1 overflow-y-auto bg-[#F8FAFC]">
+        <main className="flex-1 overflow-y-auto bg-[#F8FAFC] scroll-smooth">
           {children || <Outlet />}
         </main>
       </div>
-
-      {/* Global Utilities */}
-      <GlobalSearchModal />
-      <ToastContainer />
     </div>
   );
 };

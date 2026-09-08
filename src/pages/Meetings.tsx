@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'motion/react';
 import { useAppStore } from '../store/appStore';
 import {
   Video,
@@ -35,7 +36,12 @@ export const Meetings: React.FC = () => {
   });
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6"
+    >
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -54,7 +60,7 @@ export const Meetings: React.FC = () => {
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => navigate('/analyze')}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl shadow-xs transition-all"
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl shadow-xs transition-all cursor-pointer"
           >
             <Sparkles className="w-4 h-4" />
             <span>Analyze New Meeting</span>
@@ -88,14 +94,19 @@ export const Meetings: React.FC = () => {
         </div>
       </div>
 
-      {/* Meeting Cards List */}
+      {/* Meeting Cards List with Staggered Scroll Animations */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {filteredMeetings.map((m) => (
-          <div
+        {filteredMeetings.map((m, idx) => (
+          <motion.div
             key={m.id}
             id={`meeting-card-${m.id}`}
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.35, delay: idx * 0.08 }}
+            whileHover={{ y: -3, transition: { duration: 0.2 } }}
             onClick={() => navigate(`/meetings/${m.id}`)}
-            className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-xs hover:border-slate-300 transition-all cursor-pointer group flex flex-col justify-between space-y-4"
+            className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-md hover:border-sky-300/80 transition-all cursor-pointer group flex flex-col justify-between space-y-4"
           >
             <div>
               <div className="flex items-start justify-between gap-2 mb-2">
@@ -151,13 +162,13 @@ export const Meetings: React.FC = () => {
                 </span>
               </div>
 
-              <span className="text-xs font-semibold text-sky-700 flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
+              <span className="text-xs font-semibold text-sky-700 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
                 View Studio &rarr;
               </span>
             </div>
-          </div>
+          </motion.div>
         ))}
       </div>
-    </div>
+    </motion.div>
   );
 };

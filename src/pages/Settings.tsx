@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import { useAppStore } from '../store/appStore';
 import {
   Settings as SettingsIcon,
@@ -15,7 +16,7 @@ import {
 import { mockMeetings, initialActionItems, initialDecisions } from '../data/mockMeetings';
 
 export const Settings: React.FC = () => {
-  const { addToast } = useAppStore();
+  const { addToast, setShowSplash } = useAppStore();
   const [model, setModel] = useState('gemini-2.5-flash');
   const [confidenceThreshold, setConfidenceThreshold] = useState(70);
   const [autoNormalizeDates, setAutoNormalizeDates] = useState(true);
@@ -42,7 +43,12 @@ export const Settings: React.FC = () => {
   };
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-8">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-8"
+    >
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 text-xs font-mono font-semibold uppercase tracking-wider text-sky-700 bg-sky-50 px-2.5 py-1 rounded-full w-fit border border-sky-200/80 mb-2">
@@ -174,27 +180,41 @@ export const Settings: React.FC = () => {
             Need to restart the interactive demonstration? You can reload the pre-populated multi-speaker transcripts, action items, and consensus decisions at any time.
           </p>
 
-          <button
-            type="button"
-            onClick={handleResetData}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset to Initial Mock Dataset</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <button
+              type="button"
+              onClick={handleResetData}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset to Initial Mock Dataset</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowSplash(true);
+                addToast('Triggering Animated AI Splash Intro', 'info');
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-sky-600" />
+              <span>Replay AI Splash Intro Screen</span>
+            </button>
+          </div>
         </div>
 
         {/* Save Bar */}
         <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
           <button
             type="submit"
-            className="inline-flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl shadow-xs transition-all"
+            className="inline-flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl shadow-xs transition-all cursor-pointer"
           >
             {isSaved ? <Check className="w-4 h-4 text-white" /> : <CheckCircle2 className="w-4 h-4" />}
             <span>{isSaved ? 'Saved Preferences' : 'Save Changes'}</span>
           </button>
         </div>
       </form>
-    </div>
+    </motion.div>
   );
 };

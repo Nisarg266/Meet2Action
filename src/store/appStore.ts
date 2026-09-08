@@ -8,6 +8,16 @@ export interface ToastMessage {
   type?: 'success' | 'info' | 'warning' | 'error';
 }
 
+export interface AppNotification {
+  id: string;
+  title: string;
+  description: string;
+  timestamp: string;
+  type: 'action' | 'decision' | 'meeting' | 'system';
+  read: boolean;
+  link?: string;
+}
+
 interface AppState {
   meetings: Meeting[];
   actionItems: ActionItem[];
@@ -16,6 +26,19 @@ interface AppState {
   toasts: ToastMessage[];
   isSearchModalOpen: boolean;
   searchQuery: string;
+
+  // Splash Screen State
+  showSplash: boolean;
+  setShowSplash: (val: boolean) => void;
+
+  // Workspace State
+  currentWorkspace: string;
+  setCurrentWorkspace: (ws: string) => void;
+
+  // Notifications State
+  notifications: AppNotification[];
+  markAllNotificationsRead: () => void;
+  dismissNotification: (id: string) => void;
 
   // Actions
   setActiveMeetingId: (id: string) => void;
@@ -52,6 +75,62 @@ export const useAppStore = create<AppState>((set) => ({
   toasts: [],
   isSearchModalOpen: false,
   searchQuery: '',
+
+  // Splash Screen State
+  showSplash: true,
+  setShowSplash: (val: boolean) => set({ showSplash: val }),
+
+  // Workspace State
+  currentWorkspace: 'Acme Corp · Product Team',
+  setCurrentWorkspace: (ws: string) => set({ currentWorkspace: ws }),
+
+  // Notifications
+  notifications: [
+    {
+      id: 'notif-1',
+      title: 'Action Item Completed',
+      description: 'Amit Shah marked "Complete payment API integration" as done.',
+      timestamp: '10m ago',
+      type: 'action',
+      read: false,
+      link: '/action-items',
+    },
+    {
+      id: 'notif-2',
+      title: 'Consensus Decision Approved',
+      description: 'Release v2.0 next Monday confirmed with 100% lead quorum.',
+      timestamp: '35m ago',
+      type: 'decision',
+      read: false,
+      link: '/decisions',
+    },
+    {
+      id: 'notif-3',
+      title: 'Review Required (<70% Confidence)',
+      description: 'Pricing tier compliance item flagged for Alex Mercer review.',
+      timestamp: '1h ago',
+      type: 'action',
+      read: false,
+      link: '/action-items?filter=review',
+    },
+    {
+      id: 'notif-4',
+      title: 'New Session Analyzed',
+      description: 'Q4 Product Strategy & Sprint Planning transcript processed.',
+      timestamp: '2h ago',
+      type: 'meeting',
+      read: true,
+      link: '/meetings/meet-q4-strategy',
+    },
+  ],
+  markAllNotificationsRead: () =>
+    set((state) => ({
+      notifications: state.notifications.map((n) => ({ ...n, read: true })),
+    })),
+  dismissNotification: (id) =>
+    set((state) => ({
+      notifications: state.notifications.filter((n) => n.id !== id),
+    })),
 
   setActiveMeetingId: (id) => set({ activeMeetingId: id }),
 

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Meeting, ActionItem } from '../../types';
 import { useAppStore } from '../../store/appStore';
 import { Avatar } from '../common/Avatar';
@@ -19,7 +20,8 @@ import {
   Disc,
   MessageSquare,
   Users,
-  ChevronRight
+  ChevronRight,
+  Volume2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -27,11 +29,19 @@ interface LiveMeetingIntelligenceProps {
   meeting: Meeting;
 }
 
+interface FloatingEmoji {
+  id: string;
+  emoji: string;
+  x: number;
+}
+
 export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = ({ meeting }) => {
   const [isMicOn, setIsMicOn] = useState(true);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [activeTab, setActiveTab] = useState<'ai' | 'chat' | 'people'>('ai');
   const [activeSpeaker, setActiveSpeaker] = useState('Rahul Patel');
+  const [floatingEmojis, setFloatingEmojis] = useState<FloatingEmoji[]>([]);
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
   const { actionItems, confirmActionItem, addToast } = useAppStore();
   const navigate = useNavigate();
 
@@ -43,6 +53,18 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
     { name: 'Amit Shah', role: 'Backend Lead', talkTime: '06:18' },
     { name: 'Priya Mehta', role: 'Marketing Lead', talkTime: '05:44' },
   ];
+
+  const handleTriggerReaction = (emoji: string) => {
+    const id = `emoji-${Date.now()}-${Math.random()}`;
+    const x = Math.floor(Math.random() * 60) + 20; // 20% to 80% width
+    setFloatingEmojis((prev) => [...prev, { id, emoji, x }]);
+    setShowReactionPicker(false);
+
+    // Auto cleanup after float animation completes
+    setTimeout(() => {
+      setFloatingEmojis((prev) => prev.filter((e) => e.id !== id));
+    }, 2000);
+  };
 
   return (
     <div className="w-full flex flex-col lg:flex-row gap-4 h-full min-h-[640px]">
@@ -95,11 +117,26 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
                   </div>
                 </div>
 
-                {/* Speaking Indicator Glow */}
+                {/* Speaking Indicator Glow & Audio Waveform Equalizer */}
                 {isSpeaking && (
-                  <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 bg-sky-950/80 border border-sky-600/50 text-sky-300 px-2 py-0.5 rounded-full text-[10px] font-mono">
+                  <div className="absolute top-2.5 left-2.5 flex items-center gap-2 bg-sky-950/90 border border-sky-500/60 text-sky-300 px-2.5 py-1 rounded-full text-[10px] font-mono shadow-md">
                     <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
-                    Speaking
+                    <span>Speaking</span>
+                    <div className="flex items-center gap-0.5 h-3">
+                      {[12, 20, 8, 16, 10].map((h, i) => (
+                        <motion.div
+                          key={i}
+                          animate={{ height: [4, h, 6] }}
+                          transition={{
+                            duration: 0.5 + i * 0.1,
+                            repeat: Infinity,
+                            repeatType: 'reverse',
+                            ease: 'easeInOut',
+                          }}
+                          className="w-0.5 bg-sky-400 rounded-full"
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -112,6 +149,24 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
               </div>
             );
           })}
+
+          {/* Floating Emoji Particle Reactions Overlay */}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
+            <AnimatePresence>
+              {floatingEmojis.map((item) => (
+                <motion.div
+                  key={item.id}
+                  initial={{ y: 280, opacity: 1, scale: 0.8, x: `${item.x}%` }}
+                  animate={{ y: 20, opacity: 0, scale: 1.5 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 1.8, ease: 'easeOut' }}
+                  className="absolute text-3xl select-none"
+                >
+                  {item.emoji}
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
 
           {/* Bottom Live Caption Floating Ticker */}
           <div className="absolute bottom-4 left-4 right-4 z-10 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-xl p-3 shadow-lg">
@@ -128,11 +183,11 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
         </div>
 
         {/* Video Controls Bar */}
-        <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center justify-between z-10">
+        <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center justify-between z-10 relative">
           <div className="flex items-center gap-2">
             <button
               onClick={() => setIsMicOn(!isMicOn)}
-              className={`p-2.5 rounded-xl text-white transition-colors ${
+              className={`p-2.5 rounded-xl text-white transition-colors cursor-pointer ${
                 isMicOn ? 'bg-slate-800 hover:bg-slate-700' : 'bg-rose-600 hover:bg-rose-500'
               }`}
               title={isMicOn ? 'Mute Mic' : 'Unmute Mic'}
@@ -141,7 +196,7 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
             </button>
             <button
               onClick={() => setIsVideoOn(!isVideoOn)}
-              className={`p-2.5 rounded-xl text-white transition-colors ${
+              className={`p-2.5 rounded-xl text-white transition-colors cursor-pointer ${
                 isVideoOn ? 'bg-slate-800 hover:bg-slate-700' : 'bg-rose-600 hover:bg-rose-500'
               }`}
               title={isVideoOn ? 'Stop Video' : 'Start Video'}
@@ -150,22 +205,51 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 relative">
             <button
               onClick={() => addToast('Screen sharing permissions verified', 'info')}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors"
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors cursor-pointer"
               title="Share Screen"
             >
               <Share2 className="w-4 h-4" />
             </button>
+
+            {/* Reaction Trigger Button */}
+            <div className="relative">
+              <button
+                onClick={() => setShowReactionPicker(!showReactionPicker)}
+                className="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 hover:text-amber-400 transition-colors cursor-pointer"
+                title="Send Live Reaction"
+              >
+                <Smile className="w-4 h-4" />
+              </button>
+
+              {/* Reaction Popup Bar */}
+              <AnimatePresence>
+                {showReactionPicker && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.9 }}
+                    className="absolute bottom-12 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-700 rounded-full px-3 py-1.5 flex items-center gap-2 shadow-2xl z-30"
+                  >
+                    {['👏', '🔥', '❤️', '💡', '🎉', '🚀'].map((em) => (
+                      <button
+                        key={em}
+                        onClick={() => handleTriggerReaction(em)}
+                        className="text-xl hover:scale-130 transition-transform cursor-pointer"
+                      >
+                        {em}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
             <button
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors"
-              title="Reactions"
-            >
-              <Smile className="w-4 h-4" />
-            </button>
-            <button
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors"
+              onClick={() => addToast('Whisper NeMo subtitle engine is active', 'info')}
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors cursor-pointer"
               title="Captions"
             >
               <Subtitles className="w-4 h-4" />
@@ -177,7 +261,7 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
               addToast('Meeting ended and stored into archive', 'info');
               navigate('/action-items');
             }}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors cursor-pointer"
           >
             <PhoneOff className="w-3.5 h-3.5" />
             <span>End Call</span>
@@ -191,7 +275,7 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
         <div className="flex items-center border-b border-slate-200 px-3 pt-2 bg-slate-50/70">
           <button
             onClick={() => setActiveTab('ai')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold border-b-2 transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer ${
               activeTab === 'ai'
                 ? 'border-sky-600 text-sky-700'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -203,7 +287,7 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
           </button>
           <button
             onClick={() => setActiveTab('people')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold border-b-2 transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer ${
               activeTab === 'people'
                 ? 'border-sky-600 text-sky-700'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -214,7 +298,7 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
           </button>
           <button
             onClick={() => setActiveTab('chat')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold border-b-2 transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer ${
               activeTab === 'chat'
                 ? 'border-sky-600 text-sky-700'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -260,7 +344,7 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
                       {!item.isConfirmed && (
                         <button
                           onClick={() => confirmActionItem(item.id)}
-                          className="w-full flex items-center justify-center gap-1 text-[11px] font-semibold text-white bg-sky-600 hover:bg-sky-700 py-1.5 rounded-lg transition-colors"
+                          className="w-full flex items-center justify-center gap-1 text-[11px] font-semibold text-white bg-sky-600 hover:bg-sky-700 py-1.5 rounded-lg transition-colors cursor-pointer"
                         >
                           <Check className="w-3 h-3" />
                           Confirm Action Item
@@ -291,7 +375,7 @@ export const LiveMeetingIntelligence: React.FC<LiveMeetingIntelligenceProps> = (
               <div className="pt-2">
                 <button
                   onClick={() => navigate('/action-items')}
-                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200/70 rounded-xl transition-colors"
+                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200/70 rounded-xl transition-colors cursor-pointer"
                 >
                   <span>Open Full Action Items Workspace</span>
                   <ChevronRight className="w-4 h-4 text-slate-400" />

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
 import { useAppStore } from '../store/appStore';
-import { ActionItemCard } from '../components/action-items/ActionItemCard';
 import { PriorityBadge } from '../components/common/Badge';
 import { Avatar } from '../components/common/Avatar';
 import {
@@ -38,7 +38,12 @@ export const Dashboard: React.FC = () => {
   ).toFixed(1);
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-8">
+    <motion.div
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-8"
+    >
       {/* Top Banner / Welcome Row */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -58,21 +63,21 @@ export const Dashboard: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2.5">
           <button
             onClick={() => navigate('/analyze')}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl shadow-xs hover:shadow-md transition-all"
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-[#006194] hover:bg-[#004b73] rounded-xl shadow-xs hover:shadow-md transition-all cursor-pointer"
           >
             <Sparkles className="w-4 h-4" />
             <span>Analyze New Meeting</span>
           </button>
           <button
             onClick={() => navigate('/schedule')}
-            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
           >
             <CalendarPlus className="w-4 h-4 text-slate-500" />
             <span>Schedule</span>
           </button>
           <button
             onClick={() => exportTasksToCSV(actionItems)}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
             title="Export CSV"
           >
             <FileDown className="w-4 h-4 text-slate-500" />
@@ -81,18 +86,22 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* KPI Metric Cards Row */}
+      {/* KPI Metric Cards Row (Animated Entrance & Hover Lift) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Action Items */}
-        <div
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.05 }}
+          whileHover={{ y: -3, transition: { duration: 0.2 } }}
           onClick={() => navigate('/action-items')}
-          className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-xs hover:border-slate-300 transition-all cursor-pointer group"
+          className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-md hover:border-sky-300 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between text-slate-500 mb-3">
             <span className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-400">
               Open Action Items
             </span>
-            <div className="p-2 rounded-lg bg-sky-50 text-sky-700 group-hover:scale-105 transition-transform">
+            <div className="p-2 rounded-lg bg-sky-50 text-sky-700 group-hover:scale-110 transition-transform">
               <CheckSquare className="w-4 h-4" />
             </div>
           </div>
@@ -106,22 +115,26 @@ export const Dashboard: React.FC = () => {
           </div>
           <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
             <span>{actionItems.filter((i) => i.status === 'done').length} completed</span>
-            <span className="text-sky-700 font-medium group-hover:translate-x-0.5 transition-transform flex items-center gap-1">
+            <span className="text-sky-700 font-medium group-hover:translate-x-1 transition-transform flex items-center gap-1">
               View all &rarr;
             </span>
           </div>
-        </div>
+        </motion.div>
 
         {/* Card 2: Decisions */}
-        <div
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.1 }}
+          whileHover={{ y: -3, transition: { duration: 0.2 } }}
           onClick={() => navigate('/decisions')}
-          className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-xs hover:border-slate-300 transition-all cursor-pointer group"
+          className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between text-slate-500 mb-3">
             <span className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-400">
               Validated Consensus
             </span>
-            <div className="p-2 rounded-lg bg-emerald-50 text-emerald-700 group-hover:scale-105 transition-transform">
+            <div className="p-2 rounded-lg bg-emerald-50 text-emerald-700 group-hover:scale-110 transition-transform">
               <ShieldCheck className="w-4 h-4" />
             </div>
           </div>
@@ -135,22 +148,26 @@ export const Dashboard: React.FC = () => {
           </div>
           <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
             <span>100% Sign-off locked</span>
-            <span className="text-sky-700 font-medium group-hover:translate-x-0.5 transition-transform flex items-center gap-1">
+            <span className="text-sky-700 font-medium group-hover:translate-x-1 transition-transform flex items-center gap-1">
               Open matrix &rarr;
             </span>
           </div>
-        </div>
+        </motion.div>
 
         {/* Card 3: Meetings Analyzed */}
-        <div
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.15 }}
+          whileHover={{ y: -3, transition: { duration: 0.2 } }}
           onClick={() => navigate('/meetings')}
-          className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-xs hover:border-slate-300 transition-all cursor-pointer group"
+          className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between text-slate-500 mb-3">
             <span className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-400">
               Meetings Analyzed
             </span>
-            <div className="p-2 rounded-lg bg-indigo-50 text-indigo-700 group-hover:scale-105 transition-transform">
+            <div className="p-2 rounded-lg bg-indigo-50 text-indigo-700 group-hover:scale-110 transition-transform">
               <Video className="w-4 h-4" />
             </div>
           </div>
@@ -164,14 +181,20 @@ export const Dashboard: React.FC = () => {
           </div>
           <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
             <span>160 mins captured</span>
-            <span className="text-sky-700 font-medium group-hover:translate-x-0.5 transition-transform flex items-center gap-1">
+            <span className="text-sky-700 font-medium group-hover:translate-x-1 transition-transform flex items-center gap-1">
               Directory &rarr;
             </span>
           </div>
-        </div>
+        </motion.div>
 
         {/* Card 4: AI Extraction Accuracy */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs">
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.2 }}
+          whileHover={{ y: -3, transition: { duration: 0.2 } }}
+          className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-md hover:border-purple-300 transition-all"
+        >
           <div className="flex items-center justify-between text-slate-500 mb-3">
             <span className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-400">
               Extraction Precision
@@ -192,13 +215,19 @@ export const Dashboard: React.FC = () => {
             <span>Normalized entities</span>
             <span className="font-mono text-emerald-600 font-semibold">&plusmn;1.2% delta</span>
           </div>
-        </div>
+        </motion.div>
       </div>
 
       {/* Two Column Layout: Recent Meetings & Needs Attention */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Cols: Recent Meetings */}
-        <div className="lg:col-span-2 space-y-4">
+        {/* Left 2 Cols: Recent Meetings (with Staggered scroll animation) */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-40px' }}
+          transition={{ duration: 0.4 }}
+          className="lg:col-span-2 space-y-4"
+        >
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-bold text-slate-900 font-display">
@@ -210,18 +239,23 @@ export const Dashboard: React.FC = () => {
             </div>
             <button
               onClick={() => navigate('/meetings')}
-              className="text-xs font-semibold text-sky-700 hover:text-sky-800 flex items-center gap-1"
+              className="text-xs font-semibold text-sky-700 hover:text-sky-800 flex items-center gap-1 cursor-pointer"
             >
               View all ({meetings.length}) &rarr;
             </button>
           </div>
 
           <div className="space-y-3">
-            {meetings.map((meeting) => (
-              <div
+            {meetings.map((meeting, index) => (
+              <motion.div
                 key={meeting.id}
+                initial={{ opacity: 0, y: 15 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.3, delay: index * 0.06 }}
+                whileHover={{ scale: 1.008, transition: { duration: 0.15 } }}
                 onClick={() => navigate(`/meetings/${meeting.id}`)}
-                className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-slate-300 transition-all cursor-pointer group"
+                className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-2xs hover:shadow-md hover:border-slate-300 transition-all cursor-pointer group"
               >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                   <div className="min-w-0">
@@ -259,13 +293,19 @@ export const Dashboard: React.FC = () => {
                     {meeting.summary}
                   </p>
                 )}
-              </div>
+              </motion.div>
             ))}
           </div>
-        </div>
+        </motion.div>
 
         {/* Right 1 Col: Needs Attention & Action Items */}
-        <div className="space-y-4">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-40px' }}
+          transition={{ duration: 0.4, delay: 0.1 }}
+          className="space-y-4"
+        >
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2">
               <AlertTriangle className="w-4.5 h-4.5 text-amber-500" />
@@ -279,10 +319,11 @@ export const Dashboard: React.FC = () => {
           <div className="space-y-3">
             {/* Pending Decisions notice */}
             {pendingDecisions.slice(0, 1).map((dec) => (
-              <div
+              <motion.div
                 key={dec.id}
+                whileHover={{ scale: 1.01 }}
                 onClick={() => navigate('/decisions')}
-                className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/40 hover:bg-amber-50/70 transition-colors cursor-pointer space-y-2"
+                className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/40 hover:bg-amber-50/70 transition-all cursor-pointer space-y-2 shadow-2xs"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-800">
@@ -296,13 +337,14 @@ export const Dashboard: React.FC = () => {
                 <p className="text-[11px] text-slate-600">
                   Alex Mercer review requested before sprint lock.
                 </p>
-              </div>
+              </motion.div>
             ))}
 
             {/* Low confidence or unconfirmed tasks */}
             {needsAttentionTasks.slice(0, 3).map((task) => (
-              <div
+              <motion.div
                 key={task.id}
+                whileHover={{ scale: 1.01 }}
                 className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2"
               >
                 <div className="flex items-center justify-between gap-1">
@@ -320,18 +362,18 @@ export const Dashboard: React.FC = () => {
                     {task.confidence}% Needs Review
                   </span>
                 </div>
-              </div>
+              </motion.div>
             ))}
 
             <button
               onClick={() => navigate('/action-items?filter=review')}
-              className="w-full text-center py-2.5 px-3 bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 rounded-xl transition-colors"
+              className="w-full text-center py-2.5 px-3 bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 rounded-xl transition-colors cursor-pointer"
             >
               Review all pending items &rarr;
             </button>
           </div>
-        </div>
+        </motion.div>
       </div>
-    </div>
+    </motion.div>
   );
 };
