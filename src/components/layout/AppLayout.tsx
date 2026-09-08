@@ -5,7 +5,11 @@ import { Topbar } from './Topbar';
 import { GlobalSearchModal } from '../common/GlobalSearchModal';
 import { ToastContainer } from '../common/ToastContainer';
 
-export const AppLayout: React.FC = () => {
+interface AppLayoutProps {
+  children?: React.ReactNode;
+}
+
+export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   return (
@@ -21,7 +25,7 @@ export const AppLayout: React.FC = () => {
         <Topbar onMobileMenuClick={() => setIsMobileMenuOpen(true)} />
 
         <main className="flex-1 overflow-y-auto bg-[#F8FAFC]">
-          <Outlet />
+          {children || <Outlet />}
         </main>
       </div>
 
@@ -31,3 +35,4 @@ export const AppLayout: React.FC = () => {
     </div>
   );
 };
+
