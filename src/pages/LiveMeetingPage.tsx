@@ -619,7 +619,7 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
           void fetch('/api/livekit/dispatch-agent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roomName: room.name }),
+            body: JSON.stringify({ roomName: room.name, force: true }),
           }).catch(() => {});
         }
       }, 10000);

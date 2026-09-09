@@ -106,19 +106,12 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
 
   const activeRoomDispatches = new Map<string, { dispatchId: string; timestamp: number }>();
 
-  const dispatchSttAgent = async (roomName: string) => {
+  const dispatchSttAgent = async (roomName: string, force: boolean = false) => {
     if (!isLiveKitEnvConfigured(env)) return null;
-
-    // 1. In-memory deduplication (2 hour TTL)
-    const existing = activeRoomDispatches.get(roomName);
-    if (existing && Date.now() - existing.timestamp < 2 * 60 * 60 * 1000) {
-      console.log(`[MeetFlow STT] Agent dispatch already active for room "${roomName}" (Dispatch ID: ${existing.dispatchId})`);
-      return { id: existing.dispatchId };
-    }
 
     const host = env.url.replace('wss://', 'https://');
     try {
-      // 2. Check if agent participant is already in room
+      // 1. Check if agent participant is ALREADY ACTUALLY in room
       const roomClient = new RoomServiceClient(host, env.apiKey, env.apiSecret);
       try {
         const participants = await roomClient.listParticipants(roomName);
@@ -135,22 +128,32 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
         }
       } catch {}
 
-      // 3. Check if dispatch already exists in LiveKit Cloud
+      // 2. Short debounce: if not forced, allow at most one dispatch every 10 seconds per room
+      if (!force) {
+        const existing = activeRoomDispatches.get(roomName);
+        if (existing && Date.now() - existing.timestamp < 10 * 1000) {
+          console.log(`[MeetFlow STT] Agent dispatch recently sent for room "${roomName}" (Dispatch ID: ${existing.dispatchId})`);
+          return { id: existing.dispatchId };
+        }
+      }
+
+      // 3. Clean up any stale/dead dispatches in LiveKit Cloud for this room where no agent is joined
       const agentDispatch = new AgentDispatchClient(host, env.apiKey, env.apiSecret);
       try {
         const dispatches = await agentDispatch.listDispatch(roomName);
-        const active = dispatches.find((d) => d.room === roomName && d.agentName === 'meetflow-stt');
-        if (active) {
-          activeRoomDispatches.set(roomName, { dispatchId: active.id, timestamp: Date.now() });
-          console.log(`[MeetFlow STT] Found active dispatch for room "${roomName}" (Dispatch ID: ${active.id})`);
-          return active;
+        for (const d of dispatches) {
+          if (d.agentName === 'meetflow-stt' || !d.agentName) {
+            try {
+              await agentDispatch.deleteDispatch(d.id, roomName);
+            } catch {}
+          }
         }
       } catch {}
 
-      // 4. Create single deduplicated dispatch
+      // 4. Create fresh dispatch
       const dispatch = await agentDispatch.createDispatch(roomName, 'meetflow-stt');
       activeRoomDispatches.set(roomName, { dispatchId: dispatch.id, timestamp: Date.now() });
-      console.log(`[MeetFlow STT] Dispatched exactly ONE STT agent to room "${roomName}" (Dispatch ID: ${dispatch.id})`);
+      console.log(`[MeetFlow STT] Dispatched fresh STT agent to room "${roomName}" (Dispatch ID: ${dispatch.id})`);
       return dispatch;
     } catch (err: any) {
       if (err?.message?.includes('already exists') || err?.message?.includes('already dispatched')) {
@@ -457,13 +460,14 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
     const body = req.body || {};
     const rawRoom = body.roomName ?? body.room;
     const room = typeof rawRoom === 'string' ? rawRoom.trim() : '';
+    const force = Boolean(body.force);
 
     if (!room) {
       res.status(400).json({ error: 'missing_room', message: 'Room name required.' });
       return;
     }
 
-    const dispatch = await dispatchSttAgent(room);
+    const dispatch = await dispatchSttAgent(room, force);
     res.status(200).json({
       ok: true,
       room,
