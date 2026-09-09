@@ -17,20 +17,14 @@ from livekit.plugins import deepgram
 def get_stt_instance(session: aiohttp.ClientSession):
     """
     Initializes LiveKit Inference realtime STT with an explicit aiohttp session.
-    Preferred model: google/gemini-3.5-transcribe
-    Fallback: google/gemini-3.5-transcribe-live, deepgram/nova-3, or auto inference.
+    Preferred model: google/gemini-3.5-transcribe-live
+    Fallback: deepgram/nova-3, or auto inference.
     """
     try:
-        print("[MeetFlow STT] Initializing LiveKit Inference STT (google/gemini-3.5-transcribe)...", flush=True)
-        return inference.STT(model="google/gemini-3.5-transcribe", http_session=session)
-    except Exception as e:
-        print(f"[MeetFlow STT] LiveKit Inference google/gemini-3.5-transcribe note: {e}", flush=True)
-
-    try:
-        print("[MeetFlow STT] Trying LiveKit Inference STT (google/gemini-3.5-transcribe-live)...", flush=True)
+        print("[MeetFlow STT] Initializing LiveKit Inference STT (google/gemini-3.5-transcribe-live)...", flush=True)
         return inference.STT(model="google/gemini-3.5-transcribe-live", http_session=session)
     except Exception as e:
-        print(f"[MeetFlow STT] LiveKit Inference Gemini-live note: {e}", flush=True)
+        print(f"[MeetFlow STT] LiveKit Inference google/gemini-3.5-transcribe-live note: {e}", flush=True)
 
     try:
         print("[MeetFlow STT] Trying LiveKit Inference Deepgram (deepgram/nova-3)...", flush=True)
@@ -96,7 +90,7 @@ async def entrypoint(ctx: JobContext):
             speaker_name = participant.name or participant.identity or "Participant"
             print(f"[MeetFlow STT] Subscribing to audio track {track_sid} of participant {participant.identity} ({speaker_name})")
 
-            audio_stream = rtc.AudioStream.from_track(track)
+            audio_stream = rtc.AudioStream(track, sample_rate=16000)
             stt_stream = stt_instance.stream()
 
             async def forward_audio():
