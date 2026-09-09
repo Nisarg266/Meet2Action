@@ -4,11 +4,12 @@ import {
   useTracks,
   useSpeakingParticipants,
   useRoomContext,
+  useLocalParticipant,
   VideoTrack,
   RoomAudioRenderer,
 } from '@livekit/components-react';
 import { motion } from 'motion/react';
-import { WifiOff, MicOff, MonitorUp } from 'lucide-react';
+import { WifiOff, MicOff, MonitorUp, Video } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
 import { LiveCaptions } from './LiveCaptions';
 import { useLiveMeetingStore } from '../../store/liveMeetingStore';
@@ -35,7 +36,7 @@ const SpeakingWaveform: React.FC = () => (
 );
 
 function displayNameOf(participant: any): string {
-  return participant.isLocal ? 'You' : participant.name || participant.identity || 'Guest';
+  return participant?.isLocal ? 'You' : participant?.name || participant?.identity || 'Guest';
 }
 
 const VideoTile: React.FC<{
@@ -43,20 +44,22 @@ const VideoTile: React.FC<{
   isSpeaking: boolean;
   compact?: boolean;
   contain?: boolean;
-}> = ({ trackRef, isSpeaking, compact, contain }) => {
-  const participant = trackRef.participant;
+  onTurnOnCamera?: () => void;
+}> = ({ trackRef, isSpeaking, compact, contain, onTurnOnCamera }) => {
+  const participant = trackRef?.participant;
   const displayName = displayNameOf(participant);
-  const hasVideo = Boolean(trackRef.publication && trackRef.publication.isSubscribed !== false && !trackRef.publication.isMuted);
-  const isScreenShare = trackRef.source === Track.Source.ScreenShare;
-  const micOff = !participant.isMicrophoneEnabled;
+  const pub = trackRef?.publication;
+  const hasVideo = Boolean(pub && !pub.isMuted && (pub.track || (pub as any).isSubscribed !== false));
+  const isScreenShare = trackRef?.source === Track.Source.ScreenShare;
+  const micOff = !participant?.isMicrophoneEnabled;
 
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, scale: 0.97 }}
+      initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.25 }}
-      className={`relative rounded-xl overflow-hidden bg-slate-900 border transition-shadow ${
+      transition={{ duration: 0.2 }}
+      className={`relative w-full h-full min-h-[220px] rounded-2xl overflow-hidden bg-slate-900 border transition-all ${
         isSpeaking
           ? 'border-sky-500 ring-2 ring-sky-500/40 shadow-[0_0_24px_-6px_rgba(14,165,233,0.55)]'
           : 'border-slate-800'
@@ -67,21 +70,31 @@ const VideoTile: React.FC<{
           trackRef={trackRef}
           className={`absolute inset-0 w-full h-full ${
             contain ? 'object-contain bg-slate-950' : 'object-cover'
-          } ${participant.isLocal && !isScreenShare ? 'scale-x-[-1]' : ''}`}
+          } ${participant?.isLocal && !isScreenShare ? 'scale-x-[-1]' : ''}`}
         />
       ) : (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 px-4 text-center">
           <Avatar name={displayName} size={compact ? 'md' : 'xl'} />
           {isScreenShare && (
             <span className="text-[10px] font-mono text-slate-400 flex items-center gap-1.5">
               <MonitorUp className="w-3 h-3" /> Screen share
             </span>
           )}
+          {participant?.isLocal && !compact && onTurnOnCamera && (
+            <button
+              type="button"
+              onClick={onTurnOnCamera}
+              className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-600/90 hover:bg-sky-500 text-white text-xs font-semibold shadow-md transition-all cursor-pointer"
+            >
+              <Video className="w-3.5 h-3.5" />
+              <span>Turn on Camera</span>
+            </button>
+          )}
         </div>
       )}
 
       {!compact && (
-        <div className="absolute bottom-0 inset-x-0 flex items-center justify-between px-3 py-2 bg-gradient-to-t from-slate-950/90 to-transparent">
+        <div className="absolute bottom-0 inset-x-0 flex items-center justify-between px-3 py-2 bg-gradient-to-t from-slate-950/90 to-transparent pointer-events-none z-10">
           <span className="flex items-center gap-1.5 min-w-0">
             {isSpeaking && <SpeakingWaveform />}
             <span className="text-xs font-semibold text-slate-100 truncate drop-shadow">{displayName}</span>
@@ -91,7 +104,7 @@ const VideoTile: React.FC<{
       )}
 
       {compact && (
-        <div className="absolute bottom-0 inset-x-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-t from-slate-950/90 to-transparent">
+        <div className="absolute bottom-0 inset-x-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-t from-slate-950/90 to-transparent pointer-events-none z-10">
           <span className="text-[10px] font-semibold text-slate-100 truncate drop-shadow max-w-[80%]">
             {displayName}
           </span>
@@ -102,9 +115,13 @@ const VideoTile: React.FC<{
   );
 };
 
-export const VideoStage: React.FC = () => {
+export const VideoStage: React.FC<{ onTurnOnCamera?: () => void }> = ({ onTurnOnCamera }) => {
   const room = useRoomContext();
-  const tracks = useTracks([Track.Source.Camera, Track.Source.ScreenShare]);
+  const { localParticipant } = useLocalParticipant();
+  const tracks = useTracks([
+    { source: Track.Source.Camera, withPlaceholder: true },
+    { source: Track.Source.ScreenShare, withPlaceholder: false },
+  ]);
   const speaking = useSpeakingParticipants();
   const setConnection = useLiveMeetingStore((s) => s.setConnection);
   const [reconnecting, setReconnecting] = React.useState(false);
@@ -115,8 +132,6 @@ export const VideoStage: React.FC = () => {
 
   React.useEffect(() => {
     if (!activeSpeakerIdentity || activeSpeakerIdentity === focusIdentity) return;
-    // Switch the large stage only after the new speaker stays active for the
-    // hysteresis window — brief noise never reshuffles the layout.
     const timer = window.setTimeout(() => {
       setFocusIdentity(activeSpeakerIdentity);
     }, SPEAKER_SWITCH_DELAY_MS);
@@ -144,7 +159,7 @@ export const VideoStage: React.FC = () => {
 
   const speakingIds = new Set(speaking.map((p) => p.identity));
 
-  const isAgent = (p: any) => p.identity === 'meetflow-stt' || p.isAgent || p.name === 'AI Transcript';
+  const isAgent = (p: any) => p?.identity === 'meetflow-stt' || p?.isAgent || p?.name === 'AI Transcript';
 
   const screenShareRef = tracks.find(
     (t) =>
@@ -157,47 +172,59 @@ export const VideoStage: React.FC = () => {
   const cameraRefs = tracks.filter(
     (t) =>
       t.source === Track.Source.Camera &&
-      !isAgent(t.participant) &&
-      (t.participant.isLocal || !t.publication || t.publication.isSubscribed !== false)
+      !isAgent(t.participant)
   );
 
-  // Resolve which camera participant owns the large stage:
-  // 1. an active screen share (always wins), 2. the debounced active speaker,
-  // 3. the last focused participant, 4. the first available camera.
+  // Reliable fallback: If no camera track publications returned yet, use the local participant
+  const effectiveCameraRefs: TrackRef[] =
+    cameraRefs.length > 0
+      ? cameraRefs
+      : localParticipant
+        ? [
+            {
+              participant: localParticipant,
+              source: Track.Source.Camera,
+              publication: localParticipant.getTrackPublication(Track.Source.Camera),
+            } as TrackRef,
+          ]
+        : [];
+
   const focusCameraRef =
-    cameraRefs.find((t) => t.participant.identity === focusIdentity) ||
-    cameraRefs.find((t) => speakingIds.has(t.participant.identity)) ||
-    cameraRefs[0];
+    effectiveCameraRefs.find((t) => t.participant?.identity === focusIdentity) ||
+    effectiveCameraRefs.find((t) => speakingIds.has(t.participant?.identity)) ||
+    effectiveCameraRefs[0];
 
   const mainRef = screenShareRef || focusCameraRef || null;
   const stripRefs = mainRef
-    ? cameraRefs.filter((t) => t.participant.identity !== mainRef.participant.identity).slice(0, 8)
+    ? effectiveCameraRefs.filter((t) => t.participant?.identity !== mainRef.participant?.identity).slice(0, 8)
     : [];
 
   return (
-    <div className="absolute inset-0 bg-slate-950 p-2 sm:p-4 overflow-hidden">
+    <div className="absolute inset-0 w-full h-full bg-slate-950 p-2 sm:p-4 overflow-hidden flex flex-col">
       <RoomAudioRenderer />
 
       {mainRef ? (
-        <div className="h-full flex flex-col gap-2 sm:gap-3 min-h-0">
-          {/* Large stage: active speaker (or screen share) — 70-80% of the video stage */}
-          <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 w-full h-full flex flex-col gap-2 sm:gap-3">
+          {/* Large stage: active speaker (or screen share) */}
+          <div className="flex-1 min-h-0 w-full h-full relative">
             <VideoTile
               trackRef={mainRef}
-              isSpeaking={speakingIds.has(mainRef.participant.identity)}
+              isSpeaking={speakingIds.has(mainRef.participant?.identity)}
               contain={Boolean(screenShareRef)}
+              onTurnOnCamera={onTurnOnCamera}
             />
           </div>
 
-          {/* Participant thumbnail strip — small tiles along the bottom */}
+          {/* Participant thumbnail strip */}
           {stripRefs.length > 0 && (
             <div className="h-[76px] sm:h-24 shrink-0 flex items-stretch gap-2 sm:gap-2.5 overflow-x-auto pb-0.5">
               {stripRefs.map((ref) => (
-                <div key={`${ref.participant.identity}-${ref.source}`} className="w-32 sm:w-40 shrink-0">
+                <div key={`${ref.participant?.identity}-${ref.source}`} className="w-32 sm:w-40 shrink-0 h-full">
                   <VideoTile
                     trackRef={ref}
-                    isSpeaking={speakingIds.has(ref.participant.identity)}
+                    isSpeaking={speakingIds.has(ref.participant?.identity)}
                     compact
+                    onTurnOnCamera={onTurnOnCamera}
                   />
                 </div>
               ))}
@@ -205,14 +232,14 @@ export const VideoStage: React.FC = () => {
           )}
         </div>
       ) : (
-        <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">
+        <div className="h-full w-full flex flex-col items-center justify-center gap-3 text-center px-6">
           <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center">
             <MonitorUp className="w-6 h-6 text-sky-500" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-slate-200">Waiting for participants to enable video</p>
+            <p className="text-sm font-semibold text-slate-200">Connecting video stage…</p>
             <p className="text-xs text-slate-500 mt-1">
-              Share the invite link — everyone who joins appears here instantly.
+              Click the camera icon below to turn on your webcam.
             </p>
           </div>
         </div>

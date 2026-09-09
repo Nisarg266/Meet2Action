@@ -94,7 +94,7 @@ function mergeDecisions(live: Decision[], analyzed: Decision[]): Decision[] {
 interface LobbyScreenProps {
   roomName: string;
   initialName: string;
-  onJoin: (displayName: string) => void;
+  onJoin: (displayName: string, wantCamera: boolean, wantMic: boolean) => void;
 }
 
 const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, onJoin }) => {
@@ -147,8 +147,15 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
 
     return () => {
       active = false;
+      if (videoPreviewRef.current) {
+        videoPreviewRef.current.srcObject = null;
+      }
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current.getTracks().forEach((t) => {
+          t.stop();
+          t.enabled = false;
+        });
+        streamRef.current = null;
       }
     };
   }, [isCameraActive, isMicActive]);
@@ -164,10 +171,17 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const finalName = displayName.trim() || 'Alex Mercer';
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
+    if (videoPreviewRef.current) {
+      videoPreviewRef.current.srcObject = null;
     }
-    onJoin(finalName);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => {
+        t.stop();
+        t.enabled = false;
+      });
+      streamRef.current = null;
+    }
+    onJoin(finalName, isCameraActive, isMicActive);
   };
 
   return (
@@ -462,9 +476,9 @@ const MeetingShell: React.FC<MeetingShellProps> = ({
         onEndMeeting={onEndMeeting}
       />
 
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-        <div className="relative flex-1 min-h-[240px] lg:min-h-0 flex flex-col">
-          <div className="flex-1 relative min-h-0">
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row w-full h-full">
+        <div className="relative flex-1 min-h-[240px] lg:min-h-0 flex flex-col w-full h-full">
+          <div className="flex-1 relative min-h-0 w-full h-full">
             {stage}
             <EmojiReactionsOverlay />
             <StageOverlays
@@ -1049,11 +1063,59 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
     };
   }, [room, commitFinalTranscript, enqueueAiUtterance]);
 
-  const guard = (action: Promise<unknown>) => {
-    void action.catch((error: Error) => {
-      addToast(`Media error: ${error.message || 'could not toggle device'}`, 'error');
-    });
-  };
+  // Auto-enable camera if not yet on
+  React.useEffect(() => {
+    if (!localParticipant) return;
+    const timer = setTimeout(() => {
+      if (!localParticipant.isCameraEnabled) {
+        localParticipant.setCameraEnabled(true).catch((e) => {
+          console.warn('[MeetFlow] Initial camera auto-activation:', e);
+        });
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [localParticipant]);
+
+  const handleToggleCamera = React.useCallback(async () => {
+    try {
+      const target = !localParticipant.isCameraEnabled;
+      if (target) {
+        await localParticipant.setCameraEnabled(true).catch(async (e) => {
+          console.warn('[MeetFlow] Retrying camera enable with fallback constraints:', e);
+          return await localParticipant.setCameraEnabled(true);
+        });
+        addToast('Camera turned on', 'success');
+      } else {
+        await localParticipant.setCameraEnabled(false);
+        addToast('Camera turned off', 'info');
+      }
+    } catch (err: any) {
+      console.error('[MeetFlow] Camera toggle error:', err);
+      addToast(`Camera error: ${err?.message || 'Could not toggle camera'}`, 'error');
+    }
+  }, [localParticipant, addToast]);
+
+  const handleToggleMic = React.useCallback(async () => {
+    try {
+      const target = !localParticipant.isMicrophoneEnabled;
+      await localParticipant.setMicrophoneEnabled(target);
+      addToast(target ? 'Microphone unmuted' : 'Microphone muted', target ? 'success' : 'info');
+    } catch (err: any) {
+      console.error('[MeetFlow] Microphone toggle error:', err);
+      addToast(`Microphone error: ${err?.message || 'Could not toggle microphone'}`, 'error');
+    }
+  }, [localParticipant, addToast]);
+
+  const handleToggleScreenShare = React.useCallback(async () => {
+    try {
+      const target = !isScreenShareEnabled;
+      await localParticipant.setScreenShareEnabled(target);
+      addToast(target ? 'Screen sharing started' : 'Screen sharing stopped', target ? 'success' : 'info');
+    } catch (err: any) {
+      console.error('[MeetFlow] Screen share toggle error:', err);
+      addToast(`Screen share error: ${err?.message || 'Could not toggle screen share'}`, 'error');
+    }
+  }, [localParticipant, isScreenShareEnabled, addToast]);
 
   const handleSendReaction = React.useCallback(
     (emoji: string) => {
@@ -1089,7 +1151,7 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
       {...props}
       mode="live"
       connection={connection}
-      stage={<VideoStage />}
+      stage={<VideoStage onTurnOnCamera={handleToggleCamera} />}
       onSimulateSpeech={commitFinalTranscript}
       controls={
         <ControlBar
@@ -1100,9 +1162,9 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
           isChatOpen={props.isChatOpen}
           isPeopleOpen={props.isPeopleOpen}
           chatUnread={props.chatUnread}
-          onToggleMic={() => guard(localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled))}
-          onToggleCamera={() => guard(localParticipant.setCameraEnabled(!isCameraEnabled))}
-          onToggleScreenShare={() => guard(localParticipant.setScreenShareEnabled(!isScreenShareEnabled))}
+          onToggleMic={handleToggleMic}
+          onToggleCamera={handleToggleCamera}
+          onToggleScreenShare={handleToggleScreenShare}
           onToggleChat={props.onToggleChat}
           onTogglePeople={props.onTogglePeople}
           onEndMeeting={props.onEndMeeting}
@@ -1157,12 +1219,17 @@ export const LiveMeetingPage: React.FC = () => {
   const roomName = (roomId || '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
   const roomInstance = React.useMemo(() => new Room({ adaptiveStream: true, dynacast: true }), []);
 
+  const [preferredCamera, setPreferredCamera] = React.useState(true);
+  const [preferredMic, setPreferredMic] = React.useState(true);
+
   // Handle joining from Lobby
-  const handleJoinFromLobby = (chosenName: string) => {
+  const handleJoinFromLobby = (chosenName: string, wantCamera = true, wantMic = true) => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('meetflow_user_name', chosenName);
     }
-    useLiveMeetingStore.setState({ localName: chosenName });
+    setPreferredCamera(wantCamera);
+    setPreferredMic(wantMic);
+    useLiveMeetingStore.setState({ localName: chosenName, isCameraOn: wantCamera, isMicOn: wantMic });
     setHasJoined(true);
   };
 
@@ -1717,8 +1784,8 @@ export const LiveMeetingPage: React.FC = () => {
           token={tokenResponse.participantToken}
           serverUrl={tokenResponse.serverUrl}
           connect
-          video
-          audio
+          video={preferredCamera}
+          audio={preferredMic}
           onConnected={() => {
             connectedRef.current = true;
             useLiveMeetingStore.getState().setConnection('connected');
