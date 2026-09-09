@@ -24,6 +24,14 @@ import {
   type TranscriptUtterance,
   type SegmentAnalysisContext,
 } from './geminiService.js';
+import {
+  saveScheduledMeeting,
+  getScheduledMeeting,
+  listScheduledMeetings,
+  updateScheduledMeeting,
+  cancelScheduledMeeting,
+} from './scheduleStore.js';
+import { getActiveServerReminders, checkAndTriggerReminders } from './reminderScheduler.js';
 
 /**
  * MeetFlow AI — LiveKit token endpoint.
@@ -377,6 +385,68 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
       return;
     }
     res.status(200).json(toPublicRecording(record));
+  });
+
+  // ------------------------------------------------------------------
+  // Meeting Scheduling & Reminder APIs
+  // ------------------------------------------------------------------
+  app.get('/schedule', (_req: Request, res: Response) => {
+    res.status(200).json({ ok: true, meetings: listScheduledMeetings() });
+  });
+
+  app.get('/schedule/reminders/active', (_req: Request, res: Response) => {
+    res.status(200).json({ ok: true, reminders: getActiveServerReminders() });
+  });
+
+  app.get('/schedule/:id', (req: Request, res: Response) => {
+    const meeting = getScheduledMeeting(req.params.id);
+    if (!meeting) {
+      res.status(404).json({ ok: false, error: 'not_found', message: 'Scheduled meeting not found.' });
+      return;
+    }
+    res.status(200).json({ ok: true, meeting });
+  });
+
+  app.post('/schedule', (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      if (!body.title || !body.scheduledStart) {
+        res.status(400).json({ ok: false, error: 'invalid_data', message: 'Title and scheduledStart are required.' });
+        return;
+      }
+      const saved = saveScheduledMeeting(body);
+      checkAndTriggerReminders();
+      res.status(201).json({ ok: true, meeting: saved });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: 'save_error', message: err?.message || 'Failed to schedule meeting.' });
+    }
+  });
+
+  app.put('/schedule/:id', (req: Request, res: Response) => {
+    try {
+      const updated = updateScheduledMeeting(req.params.id, req.body || {});
+      if (!updated) {
+        res.status(404).json({ ok: false, error: 'not_found', message: 'Scheduled meeting not found.' });
+        return;
+      }
+      checkAndTriggerReminders();
+      res.status(200).json({ ok: true, meeting: updated });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: 'update_error', message: err?.message || 'Failed to update meeting.' });
+    }
+  });
+
+  app.delete('/schedule/:id', (req: Request, res: Response) => {
+    try {
+      const cancelled = cancelScheduledMeeting(req.params.id);
+      if (!cancelled) {
+        res.status(404).json({ ok: false, error: 'not_found', message: 'Scheduled meeting not found.' });
+        return;
+      }
+      res.status(200).json({ ok: true, meeting: cancelled });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: 'cancel_error', message: err?.message || 'Failed to cancel meeting.' });
+    }
   });
 
   app.get('/stt/status', async (_req: Request, res: Response) => {

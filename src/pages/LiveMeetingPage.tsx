@@ -16,9 +16,10 @@ import {
   ShieldCheck,
   Zap,
   Send,
-  MessageSquare,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Calendar,
+  Clock,
 } from 'lucide-react';
 import type { ActionItem, Decision, Meeting, TranscriptMessage } from '../types';
 import { useAppStore } from '../store/appStore';
@@ -28,6 +29,7 @@ import {
 } from '../store/liveMeetingStore';
 import { fetchLiveKitToken, getLocalIdentity, probeLiveKitStatus, type LiveKitTokenResponse } from '../services/livekitService';
 import { startRoomRecording, stopRoomRecording, fetchRecording, probeRecordingStatus } from '../services/recordingService';
+import { formatMeetingDate, formatMeetingTime } from '../utils/dateTime';
 import { getPersona, LIVE_PERSONAS, hasActionOrDecisionIntent, isTrivialBanter } from '../services/liveAiService';
 import { startTranscriptSimulator, toTranscriptPayload, type SimulatorHandle } from '../services/transcriptSimulator';
 import { type ProcessingStep } from '../services/aiService';
@@ -104,6 +106,10 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
   const [recordingReady, setRecordingReady] = React.useState<'ready' | 'unavailable' | 'checking'>('checking');
   const videoPreviewRef = React.useRef<HTMLVideoElement>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
+
+  const scheduledMeeting = useAppStore((s) =>
+    s.scheduledMeetings.find((m) => m.roomId === roomName)
+  );
 
   const shareUrl = `${window.location.origin}/live-meeting/${roomName}`;
 
@@ -188,7 +194,9 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
                   Live Meeting
                 </span>
               </div>
-              <h1 className="text-xl font-bold font-display text-slate-100 mt-1">Meeting Lobby</h1>
+              <h1 className="text-xl font-bold font-display text-slate-100 mt-1">
+                {scheduledMeeting?.title || 'Meeting Lobby'}
+              </h1>
             </div>
           </div>
 
@@ -199,6 +207,33 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
             </div>
           </div>
         </div>
+
+        {/* Scheduled Meeting Info Banner */}
+        {scheduledMeeting && (
+          <div className="bg-sky-950/40 border border-sky-800/60 rounded-2xl p-3.5 flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-sky-500/10 text-sky-400 shrink-0 mt-0.5">
+              <Calendar className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-semibold text-sky-200">
+                Scheduled Meeting: {scheduledMeeting.title}
+              </div>
+              <div className="flex items-center gap-3 text-[11px] text-sky-300/80 mt-1 flex-wrap">
+                <span className="flex items-center gap-1">
+                  <Calendar className="w-3 h-3" />
+                  {formatMeetingDate(scheduledMeeting.scheduledStart)}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {formatMeetingTime(scheduledMeeting.scheduledStart)} ({scheduledMeeting.durationMinutes} min)
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1.5">
+                You are in the lobby. Test your camera and microphone below, then click Join Meeting when ready.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Shareable Link Box */}
         <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 space-y-2">
@@ -1147,7 +1182,13 @@ export const LiveMeetingPage: React.FC = () => {
 
     if (!isResume && initializedRoomRef.current !== roomName) {
       initializedRoomRef.current = roomName;
-      const title = searchParams.get('title') || `Live Meeting · ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+      const scheduled = useAppStore.getState().scheduledMeetings.find(
+        (m) => m.roomId === roomName
+      );
+      const title =
+        searchParams.get('title') ||
+        scheduled?.title ||
+        `Live Meeting · ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
       store.startMeeting({ roomName, title, identity: participantIdentity, name: currentName });
     }
 
@@ -1188,9 +1229,9 @@ export const LiveMeetingPage: React.FC = () => {
 
   // -----------------------------------------------------------------
   // SERVER-SIDE EGRESS RECORDING (LiveKit → Egress → MP4 → Cloud storage)
-  // Started automatically when the real LiveKit room connects. The server
-  // deduplicates Egress jobs per room, so every participant calling start
-  // resolves to the same recording. Guests cannot stop it (403 server-side).
+  // Started automatically when the real LiveKit room connects IF AND ONLY IF
+  // the server has cloud storage (S3/R2) configured. If unconfigured, recording
+  // is skipped gracefully without warning toasts or marking the meeting as failed.
   // -----------------------------------------------------------------
   const attemptStartRecording = React.useCallback(async (isRetry = false) => {
     const store = useLiveMeetingStore.getState();
@@ -1199,6 +1240,17 @@ export const LiveMeetingPage: React.FC = () => {
     recordingStartRef.current = true;
 
     try {
+      // 1. Safe probe first: do not trigger egress or error toasts if storage is unconfigured
+      const probe = await probeRecordingStatus().catch(() => ({ configured: false }));
+      if (!probe.configured) {
+        console.info('[MeetFlow Recording] Server cloud storage not configured; auto-recording skipped.');
+        if (isRetry) {
+          addToast('Cloud recording is not configured on this server (S3/R2 credentials required).', 'info');
+        }
+        return;
+      }
+
+      // 2. Start room recording
       const result = await startRoomRecording({
         roomName,
         meetingId: store.meeting.id,
@@ -1218,19 +1270,34 @@ export const LiveMeetingPage: React.FC = () => {
       if (isRetry) {
         addToast('Recording restarted', 'success');
       }
-    } catch (err) {
+    } catch (err: any) {
       recordingStartRef.current = false;
-      useLiveMeetingStore.getState().setRecording({
-        id: `failed-${Date.now()}`,
-        egressId: '',
-        meetingId: store.meeting.id,
-        meetingTitle: store.meeting.title,
-        roomName,
-        status: 'failed',
-        error: err instanceof Error ? err.message : 'Recording could not be started.',
-      });
-      // Non-blocking: the meeting itself continues normally (Task 22).
-      addToast('Recording could not be started. The meeting will continue.', 'warning');
+      const isUnconfigured =
+        err?.code === 'storage_not_configured' ||
+        err?.message?.includes('storage is not configured') ||
+        err?.message?.includes('RECORDING_S3');
+
+      if (isUnconfigured) {
+        console.info('[MeetFlow Recording] Recording storage unconfigured; skipping recording.');
+        if (isRetry) {
+          addToast('Cloud recording is not configured on this server.', 'info');
+        }
+        return;
+      }
+
+      console.warn('[MeetFlow Recording] Recording start failure:', err);
+      if (isRetry) {
+        useLiveMeetingStore.getState().setRecording({
+          id: `failed-${Date.now()}`,
+          egressId: '',
+          meetingId: store.meeting.id,
+          meetingTitle: store.meeting.title,
+          roomName,
+          status: 'failed',
+          error: err instanceof Error ? err.message : 'Recording could not be started.',
+        });
+        addToast('Recording could not be started.', 'warning');
+      }
     }
   }, [roomName, addToast]);
 
@@ -1389,6 +1456,10 @@ export const LiveMeetingPage: React.FC = () => {
       roomInstance.disconnect();
     } catch {
       // room may already be disconnected
+    }
+
+    if (roomName) {
+      useAppStore.getState().updateScheduledMeetingStatusByRoom(roomName, 'completed');
     }
 
     // 0. Stop the server-side Egress recording (asynchronous — the server
@@ -1651,7 +1722,10 @@ export const LiveMeetingPage: React.FC = () => {
           onConnected={() => {
             connectedRef.current = true;
             useLiveMeetingStore.getState().setConnection('connected');
-            // Auto-start server-side Egress recording once media is connected.
+            if (roomName) {
+              useAppStore.getState().updateScheduledMeetingStatusByRoom(roomName, 'live');
+            }
+            // Auto-start server-side Egress recording once media is connected (if configured).
             void attemptStartRecording();
           }}
           onDisconnected={() => {

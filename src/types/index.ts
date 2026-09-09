@@ -3,6 +3,28 @@ export type TaskStatus = 'todo' | 'in-progress' | 'review' | 'done';
 export type DecisionStatus = 'confirmed' | 'pending' | 'open';
 export type MeetingStatus = 'analyzed' | 'processing' | 'live' | 'scheduled';
 
+export type ScheduledMeetingStatus = 'scheduled' | 'starting' | 'live' | 'completed' | 'cancelled';
+
+export interface ScheduledMeeting {
+  id: string;
+  title: string;
+  roomId: string;
+  meetingUrl: string;
+  scheduledStart: string; // ISO 8601 UTC
+  scheduledEnd: string;   // ISO 8601 UTC
+  durationMinutes: number;
+  timezone: string;       // e.g. "Asia/Kolkata"
+  hostId: string;
+  hostName: string;
+  participants: string[];
+  status: ScheduledMeetingStatus;
+  reminderMinutes: number; // 0, 5, 10, 15, 30, 60
+  createdAt: string;
+  updatedAt: string;
+  description?: string;
+  remindedAt?: string;
+}
+
 /**
  * Real meeting recording metadata backed by LiveKit Egress (server-side room
  * composite recording → MP4 → S3-compatible object storage).

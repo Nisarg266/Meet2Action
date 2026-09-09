@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Copy, Users, Radio, Sparkles, PhoneOff, ArrowLeft, Wifi, WifiOff, CircleDot, RotateCcw, Cloud } from 'lucide-react';
 import { useLiveMeetingStore, formatDuration, type LiveConnectionState, type AiStatus, type LiveMode } from '../../store/liveMeetingStore';
 import { useAppStore } from '../../store/appStore';
-import { startRoomRecording } from '../../services/recordingService';
+import { startRoomRecording, probeRecordingStatus } from '../../services/recordingService';
 import { getLocalIdentity } from '../../services/livekitService';
 
 interface MeetingStatusBarProps {
@@ -46,10 +46,15 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
 
   const retryRecording = async () => {
     const store = useLiveMeetingStore.getState();
-    if (isRetrying || !roomName || !store.meeting.id) return;
+    if (!roomName || isRetrying) return;
     setIsRetrying(true);
     store.clearRecording();
     try {
+      const probe = await probeRecordingStatus().catch(() => ({ configured: false }));
+      if (!probe.configured) {
+        addToast('Cloud recording requires S3/R2 storage credentials on the server.', 'info');
+        return;
+      }
       const result = await startRoomRecording({
         roomName,
         meetingId: store.meeting.id,
@@ -67,16 +72,23 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
         storageProvider: 'cloud',
       });
       addToast('Recording restarted', 'success');
-    } catch (err) {
-      useLiveMeetingStore.getState().setRecording({
-        id: `failed-${Date.now()}`,
-        egressId: '',
-        meetingId: store.meeting.id,
-        roomName,
-        status: 'failed',
-        error: err instanceof Error ? err.message : 'Recording could not be started.',
-      });
-      addToast('Recording could not be started. The meeting will continue.', 'warning');
+    } catch (err: any) {
+      const isUnconfigured =
+        err?.code === 'storage_not_configured' ||
+        err?.message?.includes('storage is not configured');
+      if (isUnconfigured) {
+        addToast('Cloud recording is not configured on this server.', 'info');
+      } else {
+        useLiveMeetingStore.getState().setRecording({
+          id: `failed-${Date.now()}`,
+          egressId: '',
+          meetingId: store.meeting.id,
+          roomName,
+          status: 'failed',
+          error: err instanceof Error ? err.message : 'Recording could not be started.',
+        });
+        addToast('Recording could not be started.', 'warning');
+      }
     } finally {
       setIsRetrying(false);
       setRecInfoOpen(false);

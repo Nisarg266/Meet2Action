@@ -4,6 +4,8 @@ import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { GlobalSearchModal } from '../common/GlobalSearchModal';
 import { ToastContainer } from '../common/ToastContainer';
+import { useMeetingReminders } from '../../hooks/useMeetingReminders';
+import { MeetingReminderAlert } from '../schedule/MeetingReminderAlert';
 
 interface AppLayoutProps {
   children?: React.ReactNode;
@@ -11,6 +13,7 @@ interface AppLayoutProps {
 
 export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const { activeAlert, isStartingNow, dismissAlert, snoozeAlert } = useMeetingReminders();
 
   return (
     <div className="flex h-screen w-full bg-[#F8FAFC] text-slate-900 overflow-hidden">
@@ -28,6 +31,16 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           {children || <Outlet />}
         </main>
       </div>
+
+      {/* In-App Meeting Reminder Alert Modal */}
+      {activeAlert && (
+        <MeetingReminderAlert
+          meeting={activeAlert}
+          isStartingNow={isStartingNow}
+          onDismiss={dismissAlert}
+          onSnooze={snoozeAlert}
+        />
+      )}
     </div>
   );
 };

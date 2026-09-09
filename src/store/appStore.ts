@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import { ActionItem, Decision, Meeting, TaskStatus } from '../types';
+import { ActionItem, Decision, Meeting, ScheduledMeeting, ScheduledMeetingStatus, TaskStatus } from '../types';
 
 const STORAGE_KEYS = {
   MEETINGS: 'meetflow_real_meetings',
+  SCHEDULED_MEETINGS: 'meetflow_scheduled_meetings',
   ACTION_ITEMS: 'meetflow_real_action_items',
   DECISIONS: 'meetflow_real_decisions',
   NOTIFICATIONS: 'meetflow_notifications',
@@ -46,6 +47,7 @@ export interface AppNotification {
 
 interface AppState {
   meetings: Meeting[];
+  scheduledMeetings: ScheduledMeeting[];
   actionItems: ActionItem[];
   decisions: Decision[];
   activeMeetingId: string;
@@ -89,6 +91,15 @@ interface AppState {
   addMeeting: (meeting: Meeting) => void;
   updateMeeting: (id: string, updates: Partial<Meeting>) => void;
 
+  // Scheduled Meetings
+  addScheduledMeeting: (meeting: ScheduledMeeting) => void;
+  updateScheduledMeeting: (id: string, updates: Partial<ScheduledMeeting>) => void;
+  cancelScheduledMeeting: (id: string) => void;
+  deleteScheduledMeeting: (id: string) => void;
+  updateScheduledMeetingStatus: (id: string, status: ScheduledMeetingStatus) => void;
+  updateScheduledMeetingStatusByRoom: (roomId: string, status: ScheduledMeetingStatus) => void;
+  setScheduledMeetings: (meetings: ScheduledMeeting[]) => void;
+
   // Clear / Reset
   clearWorkspaceData: () => void;
 
@@ -98,12 +109,14 @@ interface AppState {
 }
 
 const initialMeetings = loadStorage<Meeting[]>(STORAGE_KEYS.MEETINGS, []);
+const initialScheduled = loadStorage<ScheduledMeeting[]>(STORAGE_KEYS.SCHEDULED_MEETINGS, []);
 const initialActions = loadStorage<ActionItem[]>(STORAGE_KEYS.ACTION_ITEMS, []);
 const initialDecs = loadStorage<Decision[]>(STORAGE_KEYS.DECISIONS, []);
 const initialNotifs = loadStorage<AppNotification[]>(STORAGE_KEYS.NOTIFICATIONS, []);
 
 export const useAppStore = create<AppState>((set) => ({
   meetings: initialMeetings,
+  scheduledMeetings: initialScheduled,
   actionItems: initialActions,
   decisions: initialDecs,
   activeMeetingId: initialMeetings.length > 0 ? initialMeetings[0].id : '',
@@ -395,16 +408,105 @@ export const useAppStore = create<AppState>((set) => ({
   clearWorkspaceData: () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem(STORAGE_KEYS.MEETINGS);
+      localStorage.removeItem(STORAGE_KEYS.SCHEDULED_MEETINGS);
       localStorage.removeItem(STORAGE_KEYS.ACTION_ITEMS);
       localStorage.removeItem(STORAGE_KEYS.DECISIONS);
       localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
     }
     set({
       meetings: [],
+      scheduledMeetings: [],
       actionItems: [],
       decisions: [],
       notifications: [],
       activeMeetingId: '',
+    });
+  },
+
+  // Scheduled Meetings Actions
+  addScheduledMeeting: (meeting) => {
+    set((state) => {
+      const updated = [...state.scheduledMeetings.filter((m) => m.id !== meeting.id), meeting].sort(
+        (a, b) => new Date(a.scheduledStart).getTime() - new Date(b.scheduledStart).getTime()
+      );
+      saveStorage(STORAGE_KEYS.SCHEDULED_MEETINGS, updated);
+      return {
+        scheduledMeetings: updated,
+        toasts: [
+          ...state.toasts,
+          {
+            id: `toast-${Date.now()}`,
+            message: `Meeting "${meeting.title}" scheduled successfully.`,
+            type: 'success',
+          },
+        ],
+      };
+    });
+  },
+
+  updateScheduledMeeting: (id, updates) => {
+    set((state) => {
+      const updated = state.scheduledMeetings.map((m) =>
+        m.id === id ? { ...m, ...updates, updatedAt: new Date().toISOString() } : m
+      );
+      saveStorage(STORAGE_KEYS.SCHEDULED_MEETINGS, updated);
+      return { scheduledMeetings: updated };
+    });
+  },
+
+  cancelScheduledMeeting: (id) => {
+    set((state) => {
+      const updated = state.scheduledMeetings.map((m) =>
+        m.id === id ? { ...m, status: 'cancelled' as const, updatedAt: new Date().toISOString() } : m
+      );
+      saveStorage(STORAGE_KEYS.SCHEDULED_MEETINGS, updated);
+      return {
+        scheduledMeetings: updated,
+        toasts: [
+          ...state.toasts,
+          {
+            id: `toast-${Date.now()}`,
+            message: 'Scheduled meeting has been cancelled.',
+            type: 'info',
+          },
+        ],
+      };
+    });
+  },
+
+  deleteScheduledMeeting: (id) => {
+    set((state) => {
+      const updated = state.scheduledMeetings.filter((m) => m.id !== id);
+      saveStorage(STORAGE_KEYS.SCHEDULED_MEETINGS, updated);
+      return { scheduledMeetings: updated };
+    });
+  },
+
+  updateScheduledMeetingStatus: (id, status) => {
+    set((state) => {
+      const updated = state.scheduledMeetings.map((m) =>
+        m.id === id ? { ...m, status, updatedAt: new Date().toISOString() } : m
+      );
+      saveStorage(STORAGE_KEYS.SCHEDULED_MEETINGS, updated);
+      return { scheduledMeetings: updated };
+    });
+  },
+
+  updateScheduledMeetingStatusByRoom: (roomId, status) => {
+    set((state) => {
+      const normalized = (roomId || '').toLowerCase().trim();
+      const updated = state.scheduledMeetings.map((m) =>
+        m.roomId.toLowerCase() === normalized ? { ...m, status, updatedAt: new Date().toISOString() } : m
+      );
+      saveStorage(STORAGE_KEYS.SCHEDULED_MEETINGS, updated);
+      return { scheduledMeetings: updated };
+    });
+  },
+
+  setScheduledMeetings: (meetings) => {
+    set(() => {
+      saveStorage(STORAGE_KEYS.SCHEDULED_MEETINGS, meetings);
+      return { scheduledMeetings: meetings };
     });
   },
 
