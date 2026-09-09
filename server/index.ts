@@ -2,8 +2,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { createLiveKitServer, isLiveKitEnvConfigured, resolveLiveKitEnv } from './tokenServer';
-import { isGeminiConfigured, GEMINI_MODEL } from './geminiService';
+import { createLiveKitServer, isLiveKitEnvConfigured, resolveLiveKitEnv } from './tokenServer.js';
+import { isGeminiConfigured, GEMINI_MODEL } from './geminiService.js';
+import { sttWorkerManager } from './sttWorkerManager.js';
 
 dotenv.config();
 
@@ -32,6 +33,10 @@ const server = createLiveKitServer();
 
 server.listen(PORT, HOST, () => {
   const mode = isLiveKitEnvConfigured(resolveLiveKitEnv()) ? 'live' : 'demo';
+  if (mode === 'live') {
+    sttWorkerManager.startSttWorker();
+  }
+
   // Safe status logging — the API key is NEVER printed.
   console.log(`\n================================================================`);
   console.log(`[MeetFlow AI] Production server running at: http://${HOST}:${PORT}`);
@@ -40,7 +45,15 @@ server.listen(PORT, HOST, () => {
   console.log(`[MeetFlow AI] LiveKit mode:                 ${mode}`);
   console.log(`[MeetFlow AI] Gemini configured:            ${isGeminiConfigured()}`);
   console.log(`[MeetFlow AI] Gemini model:                 ${GEMINI_MODEL}`);
+  console.log(`[MeetFlow AI] STT status:                   http://${HOST}:${PORT}/api/stt/status`);
   console.log(`[MeetFlow AI] AI status:                    http://${HOST}:${PORT}/api/ai/status`);
   console.log(`[MeetFlow AI] API status:                   http://${HOST}:${PORT}/api/livekit/status`);
   console.log(`================================================================\n`);
 });
+
+const cleanup = () => {
+  sttWorkerManager.stopSttWorker();
+  process.exit(0);
+};
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);

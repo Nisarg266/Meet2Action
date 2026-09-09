@@ -1,0 +1,7 @@
+[project]
+name = "meetflow-stt"
+subdomain = "meetflow-stt"
+
+[agent]
+name = "meetflow-stt"
+entrypoint = "agent.py"

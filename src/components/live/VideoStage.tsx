@@ -115,13 +115,20 @@ export const VideoStage: React.FC = () => {
 
   const speakingIds = new Set(speaking.map((p) => p.identity));
 
+  const isAgent = (p: any) => p.identity === 'meetflow-stt' || p.isAgent || p.name === 'AI Transcript';
+
   const screenShareRef = tracks.find(
-    (t) => t.source === Track.Source.ScreenShare && t.publication && t.publication.isSubscribed !== false
+    (t) =>
+      t.source === Track.Source.ScreenShare &&
+      !isAgent(t.participant) &&
+      t.publication &&
+      t.publication.isSubscribed !== false
   );
 
   const cameraRefs = tracks.filter(
     (t) =>
       t.source === Track.Source.Camera &&
+      !isAgent(t.participant) &&
       (t.participant.isLocal || !t.publication || t.publication.isSubscribed !== false)
   );
 

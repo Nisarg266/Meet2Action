@@ -502,14 +502,48 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
   const addParticipant = useLiveMeetingStore((s) => s.addParticipant);
   const addToast = useAppStore((s) => s.addToast);
 
-  // Sync participant names into store
+  // Check if participant is a service agent (meetflow-stt)
+  const isAgentParticipant = React.useCallback((p: any) => {
+    return (
+      p?.identity === 'meetflow-stt' ||
+      p?.isAgent ||
+      p?.name === 'AI Transcript' ||
+      p?.identity?.startsWith?.('meetflow-stt') ||
+      p?.identity?.startsWith?.('agent-')
+    );
+  }, []);
+
+  // Sync participant names into store (filtering out service agent)
   React.useEffect(() => {
     const names = participants
-      .filter((p) => !p.isLocal)
+      .filter((p) => !p.isLocal && !isAgentParticipant(p))
       .map((p) => p.name || p.identity || 'Guest');
     setRoster([localName, ...names]);
     names.forEach((name) => addParticipant(name));
-  }, [participants, localName, setRoster, addParticipant]);
+  }, [participants, localName, setRoster, addParticipant, isAgentParticipant]);
+
+  // Real STT readiness tracking (Task 9 & Task 12)
+  React.useEffect(() => {
+    if (!room) return;
+
+    const hasAgent = participants.some((p) => isAgentParticipant(p));
+    const store = useLiveMeetingStore.getState();
+
+    if (hasAgent) {
+      store.setTranscriptStatus('live');
+    } else {
+      store.setTranscriptStatus('connecting');
+      // If agent doesn't join after 12 seconds, update status to 'error'
+      const timer = setTimeout(() => {
+        const latestParticipants = room.remoteParticipants;
+        const found = Array.from(latestParticipants.values()).some((p) => isAgentParticipant(p));
+        if (!found && useLiveMeetingStore.getState().transcriptStatus === 'connecting') {
+          useLiveMeetingStore.getState().setTranscriptStatus('error');
+        }
+      }, 12000);
+      return () => clearTimeout(timer);
+    }
+  }, [room, participants, isAgentParticipant]);
 
   // -----------------------------------------------------------------
   // DECOUPLED LOW-LATENCY REALTIME STT + GEMINI AI BATCH PIPELINE
@@ -829,6 +863,13 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
         const raw = new TextDecoder().decode(payload);
         const json = JSON.parse(raw);
 
+        // Handle agent ready confirmation
+        if (json.type === 'stt-agent-ready') {
+          useLiveMeetingStore.getState().setTranscriptStatus('live');
+          console.log('[MeetFlow STT] STT Agent ready confirmed in room:', json);
+          return;
+        }
+
         // Handle LiveKit text streams / agent transcription on topic 'lk.transcription'
         if (topic === 'lk.transcription' || topic === 'transcription' || json.type === 'lk.transcription') {
           const speaker =
@@ -1048,6 +1089,14 @@ export const LiveMeetingPage: React.FC = () => {
         setTokenResponse(response);
         const s = useLiveMeetingStore.getState();
         s.setMode(response.mode);
+        if (response.mode === 'live') {
+          // Explicitly ensure STT agent is dispatched to this meeting room
+          void fetch('/api/livekit/dispatch-agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ room: roomName }),
+          }).catch(() => {});
+        }
         if (response.mode === 'demo') {
           setDemoFallbackReason(response.reason || 'LiveKit server not configured.');
           s.setConnection('demo');

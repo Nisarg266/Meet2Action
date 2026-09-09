@@ -2,8 +2,9 @@ import express, { type Request, type Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { AccessToken } from 'livekit-server-sdk';
+import { AccessToken, AgentDispatchClient, RoomServiceClient } from 'livekit-server-sdk';
 import dotenv from 'dotenv';
+import { sttWorkerManager } from './sttWorkerManager.js';
 import {
   analyzeTranscriptSegment,
   analyzeFullMeeting,
@@ -12,7 +13,7 @@ import {
   transcribeAudio,
   type TranscriptUtterance,
   type SegmentAnalysisContext,
-} from './geminiService';
+} from './geminiService.js';
 
 /**
  * MeetFlow AI — LiveKit token endpoint.
@@ -82,6 +83,24 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
 
   app.use(express.json({ limit: '32kb' }));
 
+  const dispatchSttAgent = async (roomName: string) => {
+    if (!isLiveKitEnvConfigured(env)) return null;
+    const host = env.url.replace('wss://', 'https://');
+    try {
+      const agentDispatch = new AgentDispatchClient(host, env.apiKey, env.apiSecret);
+      const dispatch = await agentDispatch.createDispatch(roomName, 'meetflow-stt');
+      console.log(`[MeetFlow STT] Dispatched STT agent to room "${roomName}" (Dispatch ID: ${dispatch.id})`);
+      return dispatch;
+    } catch (err: any) {
+      if (err?.message?.includes('already exists') || err?.message?.includes('already dispatched')) {
+        console.log(`[MeetFlow STT] Agent already dispatched to room "${roomName}"`);
+      } else {
+        console.warn(`[MeetFlow STT] Agent dispatch note for room "${roomName}":`, err?.message || err);
+      }
+      return null;
+    }
+  };
+
   const handleTokenRequest = async (req: Request, res: Response) => {
     const body: TokenRequestBody = (req.body && typeof req.body === 'object' ? req.body : {}) as TokenRequestBody;
     const rawRoom = body.roomName ?? body.room ?? req.query.roomName ?? req.query.room;
@@ -129,6 +148,10 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
 
       const participantToken = await token.toJwt();
 
+      // Ensure STT agent worker is running and dispatched to this meeting room
+      sttWorkerManager.startSttWorker();
+      void dispatchSttAgent(room);
+
       res.status(200).json({
         mode: 'live' as const,
         serverUrl: env.url,
@@ -151,6 +174,30 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
   app.get('/livekit/status', (_req: Request, res: Response) => {
     res.status(200).json({
       mode: isLiveKitEnvConfigured(env) ? ('live' as const) : ('demo' as const),
+    });
+  });
+
+  app.get('/stt/status', (_req: Request, res: Response) => {
+    res.status(200).json(sttWorkerManager.getStatus());
+  });
+
+  app.post('/livekit/dispatch-agent', async (req: Request, res: Response) => {
+    const body = req.body || {};
+    const rawRoom = body.roomName ?? body.room;
+    const room = typeof rawRoom === 'string' ? rawRoom.trim() : '';
+
+    if (!room) {
+      res.status(400).json({ error: 'missing_room', message: 'Room name required.' });
+      return;
+    }
+
+    sttWorkerManager.startSttWorker();
+    const dispatch = await dispatchSttAgent(room);
+    res.status(200).json({
+      ok: true,
+      room,
+      agentName: 'meetflow-stt',
+      dispatched: Boolean(dispatch),
     });
   });
 

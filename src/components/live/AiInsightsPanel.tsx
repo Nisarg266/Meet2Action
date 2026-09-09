@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, FileText, CheckSquare, ShieldCheck, MessageCircleQuestion, AudioLines } from 'lucide-react';
+import { Sparkles, FileText, CheckSquare, ShieldCheck, MessageCircleQuestion, AudioLines, AlertCircle } from 'lucide-react';
 import type { TranscriptMessage } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { useLiveMeetingStore, type InsightTab } from '../../store/liveMeetingStore';
@@ -64,6 +64,7 @@ function renderHighlightedText(message: TranscriptMessage): React.ReactNode {
 const TranscriptFeed: React.FC = () => {
   const transcript = useLiveMeetingStore((s) => s.meeting.transcript);
   const currentInterim = useLiveMeetingStore((s) => s.currentInterim);
+  const transcriptStatus = useLiveMeetingStore((s) => s.transcriptStatus);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -71,10 +72,23 @@ const TranscriptFeed: React.FC = () => {
   }, [transcript.length, currentInterim?.text]);
 
   if (transcript.length === 0 && !currentInterim?.text) {
+    if (transcriptStatus === 'error') {
+      return (
+        <div className="flex flex-col items-center justify-center gap-3 py-14 text-center px-6">
+          <AlertCircle className="w-6 h-6 text-rose-400" />
+          <p className="text-sm font-semibold text-rose-700">Realtime transcription service is unavailable.</p>
+          <p className="text-xs text-slate-400 leading-relaxed max-w-[240px]">
+            The STT agent could not connect to this room. Video and audio continue normally.
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-14 text-center px-6">
         <AudioLines className="w-6 h-6 text-sky-400 animate-pulse" />
-        <p className="text-sm font-semibold text-slate-700">Listening to the conversation…</p>
+        <p className="text-sm font-semibold text-slate-700">
+          {transcriptStatus === 'connecting' ? 'Connecting STT agent…' : 'Listening to the conversation…'}
+        </p>
         <p className="text-xs text-slate-400 leading-relaxed max-w-[240px]">
           Transcript segments stream in here the moment speech is detected, with entities highlighted live.
         </p>
