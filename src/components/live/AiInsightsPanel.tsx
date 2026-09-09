@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, FileText, CheckSquare, ShieldCheck, MessageCircleQuestion, AudioLines, AlertCircle, ChevronUp } from 'lucide-react';
+import { Sparkles, FileText, CheckSquare, ShieldCheck, MessageCircleQuestion, AudioLines, AlertCircle, ChevronUp, RefreshCw } from 'lucide-react';
 import type { TranscriptMessage } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { useLiveMeetingStore, type InsightTab } from '../../store/liveMeetingStore';
@@ -72,26 +72,42 @@ const TranscriptFeed: React.FC = () => {
   }, [transcript.length, currentInterim?.text]);
 
   if (transcript.length === 0 && !currentInterim?.text) {
-    if (transcriptStatus === 'error') {
-      return (
-        <div className="flex flex-col items-center justify-center gap-3 py-14 text-center px-6">
-          <AlertCircle className="w-6 h-6 text-rose-400" />
-          <p className="text-sm font-semibold text-rose-700">Realtime transcription service is unavailable.</p>
-          <p className="text-xs text-slate-400 leading-relaxed max-w-[240px]">
-            The STT agent could not connect to this room. Video and audio continue normally.
-          </p>
-        </div>
-      );
-    }
+    const handleRetryDispatch = () => {
+      const store = useLiveMeetingStore.getState();
+      store.setTranscriptStatus('connecting');
+      const roomName = store.meeting.roomName;
+      if (roomName) {
+        void fetch('/api/livekit/dispatch-agent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomName }),
+        }).catch(() => {});
+      }
+    };
+
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-14 text-center px-6">
-        <AudioLines className="w-6 h-6 text-sky-400 animate-pulse" />
+        <AudioLines className="w-6 h-6 text-sky-500 animate-pulse" />
         <p className="text-sm font-semibold text-slate-700">
-          {transcriptStatus === 'connecting' ? 'Connecting STT agent…' : 'Listening to the conversation…'}
+          {transcriptStatus === 'connecting'
+            ? 'Connecting STT agent…'
+            : transcriptStatus === 'error'
+              ? 'STT agent connecting…'
+              : 'Listening to the conversation…'}
         </p>
-        <p className="text-xs text-slate-400 leading-relaxed max-w-[240px]">
+        <p className="text-xs text-slate-400 leading-relaxed max-w-[250px]">
           Transcript segments stream in here the moment speech is detected, with entities highlighted live.
         </p>
+        {(transcriptStatus === 'connecting' || transcriptStatus === 'error') && (
+          <button
+            type="button"
+            onClick={handleRetryDispatch}
+            className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-700 text-xs font-semibold border border-sky-200 transition-all cursor-pointer shadow-xs"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Reconnect STT Agent</span>
+          </button>
+        )}
       </div>
     );
   }

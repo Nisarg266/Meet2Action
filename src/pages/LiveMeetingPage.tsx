@@ -605,19 +605,26 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
       const current = store.transcriptStatus;
       if (current === 'live') {
         store.setTranscriptStatus('reconnecting');
-      } else if (current !== 'error') {
+      } else {
         store.setTranscriptStatus('connecting');
       }
 
-      // If agent doesn't join after 15 seconds, mark error
-      const timer = setTimeout(() => {
+      // Automatically retry dispatching agent periodically if not yet joined
+      const interval = setInterval(() => {
         const latest = room.remoteParticipants;
         const found = Array.from(latest.values()).some((p) => isAgentParticipant(p));
-        if (!found && useLiveMeetingStore.getState().transcriptStatus === 'connecting') {
-          useLiveMeetingStore.getState().setTranscriptStatus('error');
+        if (found) {
+          useLiveMeetingStore.getState().setTranscriptStatus('live');
+        } else if (room.name) {
+          void fetch('/api/livekit/dispatch-agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomName: room.name }),
+          }).catch(() => {});
         }
-      }, 15000);
-      return () => clearTimeout(timer);
+      }, 10000);
+
+      return () => clearInterval(interval);
     }
   }, [room, participants, isAgentParticipant]);
 
