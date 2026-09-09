@@ -25,6 +25,10 @@ import { CalendarView } from './pages/CalendarView';
 import { IntegrationsHub } from './pages/IntegrationsHub';
 import { HelpCenter } from './pages/HelpCenter';
 import { LiveMeetingLobby } from './pages/LiveMeetingLobby';
+import { Recordings } from './pages/Recordings';
+const RecordingPlayer = React.lazy(() =>
+  import('./pages/RecordingPlayer').then((m) => ({ default: m.RecordingPlayer }))
+);
 const LiveMeetingPage = React.lazy(() =>
   import('./pages/LiveMeetingPage').then((m) => ({ default: m.LiveMeetingPage }))
 );
@@ -67,6 +71,15 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/meetings" element={<Meetings />} />
           <Route path="/meetings/:id" element={<MeetingDetail />} />
+          <Route path="/recordings" element={<Recordings />} />
+          <Route
+            path="/recordings/:id"
+            element={
+              <React.Suspense fallback={null}>
+                <RecordingPlayer />
+              </React.Suspense>
+            }
+          />
           <Route path="/analyze" element={<AnalyzeMeeting />} />
           <Route path="/action-items" element={<ActionItems />} />
           <Route path="/decisions" element={<Decisions />} />

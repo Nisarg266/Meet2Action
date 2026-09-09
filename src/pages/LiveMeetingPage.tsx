@@ -27,6 +27,7 @@ import {
   formatDuration,
 } from '../store/liveMeetingStore';
 import { fetchLiveKitToken, getLocalIdentity, probeLiveKitStatus, type LiveKitTokenResponse } from '../services/livekitService';
+import { startRoomRecording, stopRoomRecording, fetchRecording, probeRecordingStatus } from '../services/recordingService';
 import { getPersona, LIVE_PERSONAS, hasActionOrDecisionIntent, isTrivialBanter } from '../services/liveAiService';
 import { startTranscriptSimulator, toTranscriptPayload, type SimulatorHandle } from '../services/transcriptSimulator';
 import { type ProcessingStep } from '../services/aiService';
@@ -40,12 +41,13 @@ import { EndMeetingModal } from '../components/live/EndMeetingModal';
 import { FinalAnalysisOverlay } from '../components/live/FinalAnalysisOverlay';
 
 const FINAL_STEPS: { id: number; label: string }[] = [
-  { id: 1, label: 'Disconnecting from LiveKit room' },
-  { id: 2, label: 'Saving final transcript' },
-  { id: 3, label: 'Running final AI analysis with Gemini' },
-  { id: 4, label: 'Extracting normalized action items' },
-  { id: 5, label: 'Detecting decisions & open discussions' },
-  { id: 6, label: 'Generating executive synthesis' },
+  { id: 1, label: 'Stopping cloud recording (Egress)' },
+  { id: 2, label: 'Disconnecting from LiveKit room' },
+  { id: 3, label: 'Saving final transcript' },
+  { id: 4, label: 'Running final AI analysis with Gemini' },
+  { id: 5, label: 'Extracting normalized action items' },
+  { id: 6, label: 'Detecting decisions & open discussions' },
+  { id: 7, label: 'Generating executive synthesis' },
 ];
 
 function wordSimilarity(a: string, b: string): number {
@@ -98,6 +100,7 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
   const [isMicActive, setIsMicActive] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
   const [serverMode, setServerMode] = React.useState<'live' | 'demo' | 'checking'>('checking');
+  const [recordingReady, setRecordingReady] = React.useState<'ready' | 'unavailable' | 'checking'>('checking');
   const videoPreviewRef = React.useRef<HTMLVideoElement>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
 
@@ -105,6 +108,7 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
 
   React.useEffect(() => {
     void probeLiveKitStatus().then(setServerMode);
+    void probeRecordingStatus().then((status) => setRecordingReady(status.configured ? 'ready' : 'unavailable'));
   }, []);
 
   // Initialize preview stream
@@ -261,7 +265,7 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
         </div>
 
         {/* Readiness Badges */}
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-2.5 text-center">
             <div className="text-[10px] font-mono text-slate-500 uppercase">LiveKit</div>
             <div className="flex items-center justify-center gap-1.5 mt-1 text-xs font-semibold text-emerald-400">
@@ -281,6 +285,21 @@ const PreMeetingLobby: React.FC<LobbyScreenProps> = ({ roomName, initialName, on
             <div className="flex items-center justify-center gap-1.5 mt-1 text-xs font-semibold text-emerald-400">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
               {isMicActive ? 'Ready' : 'Off'}
+            </div>
+          </div>
+          <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-2.5 text-center">
+            <div className="text-[10px] font-mono text-slate-500 uppercase">Cloud Recording</div>
+            <div
+              className={`flex items-center justify-center gap-1.5 mt-1 text-xs font-semibold ${
+                recordingReady === 'ready' ? 'text-emerald-400' : recordingReady === 'unavailable' ? 'text-amber-400' : 'text-slate-400'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  recordingReady === 'ready' ? 'bg-emerald-400' : recordingReady === 'unavailable' ? 'bg-amber-400' : 'bg-slate-500'
+                }`}
+              />
+              {recordingReady === 'ready' ? 'Ready' : recordingReady === 'unavailable' ? 'Not set up' : 'Checking…'}
             </div>
           </div>
         </div>
@@ -522,7 +541,7 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
     names.forEach((name) => addParticipant(name));
   }, [participants, localName, setRoster, addParticipant, isAgentParticipant]);
 
-  // Real STT readiness tracking (Task 9 & Task 12)
+  // Real STT readiness tracking based on agent presence (PART 7)
   React.useEffect(() => {
     if (!room) return;
 
@@ -532,15 +551,21 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
     if (hasAgent) {
       store.setTranscriptStatus('live');
     } else {
-      store.setTranscriptStatus('connecting');
-      // If agent doesn't join after 12 seconds, update status to 'error'
+      const current = store.transcriptStatus;
+      if (current === 'live') {
+        store.setTranscriptStatus('reconnecting');
+      } else if (current !== 'error') {
+        store.setTranscriptStatus('connecting');
+      }
+
+      // If agent doesn't join after 15 seconds, mark error
       const timer = setTimeout(() => {
-        const latestParticipants = room.remoteParticipants;
-        const found = Array.from(latestParticipants.values()).some((p) => isAgentParticipant(p));
+        const latest = room.remoteParticipants;
+        const found = Array.from(latest.values()).some((p) => isAgentParticipant(p));
         if (!found && useLiveMeetingStore.getState().transcriptStatus === 'connecting') {
           useLiveMeetingStore.getState().setTranscriptStatus('error');
         }
-      }, 12000);
+      }, 15000);
       return () => clearTimeout(timer);
     }
   }, [room, participants, isAgentParticipant]);
@@ -1025,6 +1050,7 @@ export const LiveMeetingPage: React.FC = () => {
   const aiStatus = useLiveMeetingStore((s) => s.aiStatus);
   const meeting = useLiveMeetingStore((s) => s.meeting);
   const localName = useLiveMeetingStore((s) => s.localName);
+  const recording = useLiveMeetingStore((s) => s.recording);
   const demoIsMicOn = useLiveMeetingStore((s) => s.isMicOn);
   const demoIsCameraOn = useLiveMeetingStore((s) => s.isCameraOn);
   const demoIsScreenSharing = useLiveMeetingStore((s) => s.isScreenSharing);
@@ -1049,6 +1075,7 @@ export const LiveMeetingPage: React.FC = () => {
   const initializedRoomRef = React.useRef<string | null>(null);
   const endingRef = React.useRef(false);
   const connectedRef = React.useRef(false);
+  const recordingStartRef = React.useRef(false);
 
   const roomName = (roomId || '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
   const roomInstance = React.useMemo(() => new Room({ adaptiveStream: true, dynacast: true }), []);
@@ -1116,6 +1143,78 @@ export const LiveMeetingPage: React.FC = () => {
     const timer = setInterval(() => useLiveMeetingStore.getState().tick(), 1000);
     return () => clearInterval(timer);
   }, [phase]);
+
+  // -----------------------------------------------------------------
+  // SERVER-SIDE EGRESS RECORDING (LiveKit → Egress → MP4 → Cloud storage)
+  // Started automatically when the real LiveKit room connects. The server
+  // deduplicates Egress jobs per room, so every participant calling start
+  // resolves to the same recording. Guests cannot stop it (403 server-side).
+  // -----------------------------------------------------------------
+  const attemptStartRecording = React.useCallback(async (isRetry = false) => {
+    const store = useLiveMeetingStore.getState();
+    if (!roomName || store.mode !== 'live') return;
+    if (!isRetry && recordingStartRef.current) return;
+    recordingStartRef.current = true;
+
+    try {
+      const result = await startRoomRecording({
+        roomName,
+        meetingId: store.meeting.id,
+        meetingTitle: store.meeting.title,
+        requestedBy: getLocalIdentity(),
+      });
+      useLiveMeetingStore.getState().setRecording({
+        id: result.recordingId,
+        egressId: result.egressId,
+        meetingId: store.meeting.id,
+        meetingTitle: store.meeting.title,
+        roomName,
+        status: result.status || 'starting',
+        startedAt: result.startedAt || new Date().toISOString(),
+        storageProvider: 'cloud',
+      });
+      if (isRetry) {
+        addToast('Recording restarted', 'success');
+      }
+    } catch (err) {
+      recordingStartRef.current = false;
+      useLiveMeetingStore.getState().setRecording({
+        id: `failed-${Date.now()}`,
+        egressId: '',
+        meetingId: store.meeting.id,
+        meetingTitle: store.meeting.title,
+        roomName,
+        status: 'failed',
+        error: err instanceof Error ? err.message : 'Recording could not be started.',
+      });
+      // Non-blocking: the meeting itself continues normally (Task 22).
+      addToast('Recording could not be started. The meeting will continue.', 'warning');
+    }
+  }, [roomName, addToast]);
+
+  // Poll recording lifecycle while the meeting is live (starting → recording).
+  React.useEffect(() => {
+    if (phase !== 'live') return;
+    const timer = setInterval(async () => {
+      const store = useLiveMeetingStore.getState();
+      const rec = store.recording;
+      if (!rec || !rec.id || rec.id.startsWith('failed-')) return;
+      if (rec.status !== 'starting' && rec.status !== 'recording') return;
+      try {
+        const fresh = await fetchRecording(rec.id);
+        const current = useLiveMeetingStore.getState().recording;
+        if (current && current.id === fresh.id && fresh.status !== current.status) {
+          useLiveMeetingStore.getState().setRecording({ ...fresh });
+          if (fresh.status === 'failed') {
+            addToast('Recording failed. The meeting continues — transcript and AI are unaffected.', 'warning');
+          }
+        }
+      } catch {
+        // transient — keep polling
+      }
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [phase, addToast]);
 
   // 3. Demo Mode simulator fallback ONLY when mode === 'demo'
   React.useEffect(() => {
@@ -1250,6 +1349,33 @@ export const LiveMeetingPage: React.FC = () => {
       // room may already be disconnected
     }
 
+    // 0. Stop the server-side Egress recording (asynchronous — the server
+    // finalizes/uploads the MP4 in the background; we never block on it).
+    // Meeting intelligence (transcript, Gemini) and recording are fully
+    // independent subsystems: a failure in one never loses the other.
+    const activeRecording = useLiveMeetingStore.getState().recording;
+    if (
+      activeRecording &&
+      activeRecording.egressId &&
+      (activeRecording.status === 'starting' || activeRecording.status === 'recording')
+    ) {
+      void stopRoomRecording({ egressId: activeRecording.egressId, requestedBy: getLocalIdentity() })
+        .then((result) => {
+          const current = useLiveMeetingStore.getState().recording;
+          if (current && current.id === result.recordingId) {
+            useLiveMeetingStore.getState().setRecording({
+              ...current,
+              status: (result.status as any) || 'processing',
+            });
+          }
+        })
+        .catch(() => {
+          // Guest devices get 403 (only the host may stop) — expected and safe.
+          // The host's own stop request already handled the real shutdown.
+        });
+    }
+    const finalRecording = useLiveMeetingStore.getState().recording;
+
     const setStep = (index: number, status: 'processing' | 'done') => {
       steps[index] = { ...steps[index], status };
       setFinalSteps([...steps]);
@@ -1260,13 +1386,17 @@ export const LiveMeetingPage: React.FC = () => {
     setStep(0, 'done');
 
     setStep(1, 'processing');
+    await new Promise((r) => setTimeout(r, 300));
+    setStep(1, 'done');
+
+    setStep(2, 'processing');
     const transcriptText = live.transcript
       .map((m) => `${m.speaker}: "${m.text}"`)
       .join('\n');
     await new Promise((r) => setTimeout(r, 400));
-    setStep(1, 'done');
+    setStep(2, 'done');
 
-    setStep(2, 'processing');
+    setStep(3, 'processing');
     let analyzed: any = null;
     const elapsedSeconds = useLiveMeetingStore.getState().elapsedSeconds;
     const durationMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
@@ -1293,13 +1423,13 @@ export const LiveMeetingPage: React.FC = () => {
       console.warn('Final meeting synthesis call failed:', e);
     }
 
-    setStep(2, 'done');
     setStep(3, 'done');
-    await new Promise((r) => setTimeout(r, 300));
     setStep(4, 'done');
     await new Promise((r) => setTimeout(r, 300));
+    setStep(5, 'done');
+    await new Promise((r) => setTimeout(r, 300));
 
-    setStep(5, 'processing');
+    setStep(6, 'processing');
     const liveActions = live.actionItems;
     const liveDecisions = live.decisions;
     const confirmedDecisions = liveDecisions.filter((d) => d.status === 'confirmed').length;
@@ -1388,12 +1518,26 @@ export const LiveMeetingPage: React.FC = () => {
       status: 'analyzed',
       platform: 'LiveKit',
       meetingUrl: live.roomName,
-      isRecording: true,
+      roomId: live.roomName,
+      roomName: live.roomName,
+      shareUrl: `${window.location.origin}/live-meeting/${live.roomName}`,
+      // Real Egress recording metadata (server finishes processing the MP4
+      // asynchronously — status here is typically "processing" and is updated
+      // by polling from MeetingDetail / Recordings once it turns "ready").
+      recording:
+        finalRecording && finalRecording.egressId
+          ? {
+              ...finalRecording,
+              meetingId: live.id,
+              meetingTitle: analyzed?.title || live.title,
+              duration: elapsedSeconds,
+            }
+          : null,
       recordingDuration: formatDuration(elapsedSeconds),
     };
 
     await new Promise((r) => setTimeout(r, 450));
-    setStep(5, 'done');
+    setStep(6, 'done');
 
     // Save into appStore and localStorage
     useAppStore.getState().addMeeting(finalMeeting);
@@ -1465,6 +1609,8 @@ export const LiveMeetingPage: React.FC = () => {
           onConnected={() => {
             connectedRef.current = true;
             useLiveMeetingStore.getState().setConnection('connected');
+            // Auto-start server-side Egress recording once media is connected.
+            void attemptStartRecording();
           }}
           onDisconnected={() => {
             if (!endingRef.current && connectedRef.current) {
@@ -1519,6 +1665,7 @@ export const LiveMeetingPage: React.FC = () => {
         isOpen={endModalOpen}
         onClose={() => setEndModalOpen(false)}
         onConfirm={() => void confirmEndMeeting()}
+        hasRecording={Boolean(recording?.egressId && (recording.status === 'recording' || recording.status === 'starting'))}
         stats={{
           transcriptCount: meeting.transcript.length,
           actionCount: meeting.actionItems.length,

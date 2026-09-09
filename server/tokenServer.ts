@@ -2,8 +2,18 @@ import express, { type Request, type Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { AccessToken, AgentDispatchClient, RoomServiceClient } from 'livekit-server-sdk';
+import { AccessToken, AgentDispatchClient, RoomServiceClient, WebhookReceiver } from 'livekit-server-sdk';
 import dotenv from 'dotenv';
+import {
+  RecordingError,
+  handleEgressWebhookEvent,
+  refreshRecordingFromEgress,
+  recordingConfigSummary,
+  resolveRecordingEnv,
+  startRoomRecording,
+  stopRoomRecording,
+} from './egressService.js';
+import { getRecording, listRecordings, toPublicRecording } from './recordingStore.js';
 import { sttWorkerManager } from './sttWorkerManager.js';
 import {
   analyzeTranscriptSegment,
@@ -81,15 +91,58 @@ function randomId(prefix: string): string {
 export function createLiveKitRouter(env: LiveKitEnv): express.Express {
   const app = express();
 
-  app.use(express.json({ limit: '32kb' }));
+  // Raw body capture for the LiveKit webhook route (signature validation needs
+  // the exact bytes) — must be mounted BEFORE the global JSON parser.
+  app.use('/livekit/recording/webhook', express.raw({ type: '*/*', limit: '2mb' }));
+  app.use(express.json({ limit: '10mb' }));
+
+  const activeRoomDispatches = new Map<string, { dispatchId: string; timestamp: number }>();
 
   const dispatchSttAgent = async (roomName: string) => {
     if (!isLiveKitEnvConfigured(env)) return null;
+
+    // 1. In-memory deduplication (2 hour TTL)
+    const existing = activeRoomDispatches.get(roomName);
+    if (existing && Date.now() - existing.timestamp < 2 * 60 * 60 * 1000) {
+      console.log(`[MeetFlow STT] Agent dispatch already active for room "${roomName}" (Dispatch ID: ${existing.dispatchId})`);
+      return { id: existing.dispatchId };
+    }
+
     const host = env.url.replace('wss://', 'https://');
     try {
+      // 2. Check if agent participant is already in room
+      const roomClient = new RoomServiceClient(host, env.apiKey, env.apiSecret);
+      try {
+        const participants = await roomClient.listParticipants(roomName);
+        const hasAgent = participants.some(
+          (p) =>
+            p.identity === 'meetflow-stt' ||
+            p.identity.startsWith('meetflow-stt') ||
+            p.identity.startsWith('agent-') ||
+            Boolean((p as any).isAgent)
+        );
+        if (hasAgent) {
+          console.log(`[MeetFlow STT] meetflow-stt already active in room "${roomName}" — skipping duplicate dispatch.`);
+          return { id: 'existing-participant' };
+        }
+      } catch {}
+
+      // 3. Check if dispatch already exists in LiveKit Cloud
       const agentDispatch = new AgentDispatchClient(host, env.apiKey, env.apiSecret);
+      try {
+        const dispatches = await agentDispatch.listDispatch(roomName);
+        const active = dispatches.find((d) => d.room === roomName && d.agentName === 'meetflow-stt');
+        if (active) {
+          activeRoomDispatches.set(roomName, { dispatchId: active.id, timestamp: Date.now() });
+          console.log(`[MeetFlow STT] Found active dispatch for room "${roomName}" (Dispatch ID: ${active.id})`);
+          return active;
+        }
+      } catch {}
+
+      // 4. Create single deduplicated dispatch
       const dispatch = await agentDispatch.createDispatch(roomName, 'meetflow-stt');
-      console.log(`[MeetFlow STT] Dispatched STT agent to room "${roomName}" (Dispatch ID: ${dispatch.id})`);
+      activeRoomDispatches.set(roomName, { dispatchId: dispatch.id, timestamp: Date.now() });
+      console.log(`[MeetFlow STT] Dispatched exactly ONE STT agent to room "${roomName}" (Dispatch ID: ${dispatch.id})`);
       return dispatch;
     } catch (err: any) {
       if (err?.message?.includes('already exists') || err?.message?.includes('already dispatched')) {
@@ -148,8 +201,7 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
 
       const participantToken = await token.toJwt();
 
-      // Ensure STT agent worker is running and dispatched to this meeting room
-      sttWorkerManager.startSttWorker();
+      // Ensure STT agent is dispatched to this meeting room (deduplicated)
       void dispatchSttAgent(room);
 
       res.status(200).json({
@@ -174,11 +226,161 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
   app.get('/livekit/status', (_req: Request, res: Response) => {
     res.status(200).json({
       mode: isLiveKitEnvConfigured(env) ? ('live' as const) : ('demo' as const),
+      recording: recordingConfigSummary(resolveRecordingEnv()),
     });
   });
 
-  app.get('/stt/status', (_req: Request, res: Response) => {
-    res.status(200).json(sttWorkerManager.getStatus());
+  // ------------------------------------------------------------------
+  // LiveKit Egress room recording (server-side, MP4 → S3-compatible storage)
+  // ------------------------------------------------------------------
+
+  const handleRecordingError = (res: Response, error: unknown) => {
+    if (error instanceof RecordingError) {
+      res.status(error.status).json({ ok: false, error: error.code, message: error.message });
+    } else {
+      console.error('[MeetFlow Recording] Unexpected error:', error);
+      res.status(500).json({ ok: false, error: 'recording_error', message: 'Recording operation failed.' });
+    }
+  };
+
+  /** POST /api/livekit/recording/start — { roomName, meetingId, meetingTitle?, requestedBy } */
+  app.post('/livekit/recording/start', async (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      const roomName = typeof body.roomName === 'string' ? body.roomName.trim() : '';
+      const meetingId = typeof body.meetingId === 'string' ? body.meetingId.trim() : '';
+      const meetingTitle = typeof body.meetingTitle === 'string' ? body.meetingTitle.slice(0, 120) : undefined;
+      const requestedBy = typeof body.requestedBy === 'string' ? body.requestedBy.trim() : '';
+
+      if (!ROOM_PATTERN.test(roomName)) {
+        res.status(400).json({
+          ok: false,
+          error: 'invalid_room',
+          message: 'roomName must be 3-64 characters (letters, numbers, "-" or "_").',
+        });
+        return;
+      }
+      if (!meetingId) {
+        res.status(400).json({ ok: false, error: 'invalid_meeting', message: 'meetingId is required.' });
+        return;
+      }
+      if (!requestedBy) {
+        res.status(400).json({ ok: false, error: 'invalid_identity', message: 'requestedBy (participant identity) is required.' });
+        return;
+      }
+
+      const result = await startRoomRecording({ roomName, meetingId, meetingTitle, requestedBy });
+      const view = toPublicRecording(result.recording);
+      res.status(200).json({
+        ok: true,
+        recordingId: view.id,
+        egressId: view.egressId,
+        status: view.status,
+        startedAt: view.startedAt,
+        reused: result.reused,
+      });
+    } catch (error) {
+      handleRecordingError(res, error);
+    }
+  });
+
+  /** POST /api/livekit/recording/stop — { egressId, requestedBy } */
+  app.post('/livekit/recording/stop', async (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      const egressId = typeof body.egressId === 'string' ? body.egressId.trim() : '';
+      const requestedBy = typeof body.requestedBy === 'string' ? body.requestedBy.trim() : '';
+
+      if (!egressId) {
+        res.status(400).json({ ok: false, error: 'invalid_egress', message: 'egressId is required.' });
+        return;
+      }
+      if (!requestedBy) {
+        res.status(400).json({ ok: false, error: 'invalid_identity', message: 'requestedBy (participant identity) is required.' });
+        return;
+      }
+
+      const record = await stopRoomRecording({ egressId, requestedBy });
+      const view = toPublicRecording(record);
+      res.status(200).json({
+        ok: true,
+        recordingId: view.id,
+        egressId: view.egressId,
+        status: view.status,
+      });
+    } catch (error) {
+      handleRecordingError(res, error);
+    }
+  });
+
+  /** GET /api/livekit/recording/status — safe configuration probe (no secrets). */
+  app.get('/livekit/recording/status', (_req: Request, res: Response) => {
+    res.status(200).json(recordingConfigSummary(resolveRecordingEnv()));
+  });
+
+  /** POST /api/livekit/recording/webhook — LiveKit project webhook receiver (egress lifecycle). */
+  app.post('/livekit/recording/webhook', async (req: Request, res: Response) => {
+    try {
+      if (!isLiveKitEnvConfigured(env)) {
+        res.status(503).json({ ok: false, message: 'LiveKit not configured.' });
+        return;
+      }
+      const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : JSON.stringify(req.body || {});
+      const authHeader = (req.header('Authorize') || req.header('Authorization') || '') as string;
+      const receiver = new WebhookReceiver(env.apiKey, env.apiSecret);
+      const event = await receiver.receive(raw, authHeader);
+      handleEgressWebhookEvent(event);
+      res.status(200).json({ ok: true });
+    } catch (error) {
+      // Never leak signature internals — just reject.
+      console.warn('[MeetFlow Recording] Webhook rejected:', error instanceof Error ? error.message : error);
+      res.status(401).json({ ok: false, message: 'Invalid webhook signature.' });
+    }
+  });
+
+  /** GET /api/livekit/recording/:recordingId — lifecycle status (lazy reconciliation). */
+  app.get('/livekit/recording/:recordingId', async (req: Request, res: Response) => {
+    try {
+      const record = getRecording(req.params.recordingId);
+      if (!record) {
+        res.status(404).json({ ok: false, error: 'recording_not_found', message: 'Recording not found.' });
+        return;
+      }
+
+      // Lazy reconciliation: for non-terminal states poll LiveKit once so the
+      // status reflects reality even without webhooks or an active watcher.
+      if (record.status !== 'ready' && record.status !== 'failed') {
+        try {
+          await refreshRecordingFromEgress(record.id);
+        } catch {
+          // transient — return last known state
+        }
+      }
+
+      const fresh = getRecording(record.id) || record;
+      res.status(200).json(toPublicRecording(fresh));
+    } catch (error) {
+      handleRecordingError(res, error);
+    }
+  });
+
+  /** GET /api/recordings — list all recordings (metadata only). */
+  app.get('/recordings', (_req: Request, res: Response) => {
+    res.status(200).json({ ok: true, recordings: listRecordings().map(toPublicRecording) });
+  });
+
+  /** GET /api/recordings/:id — single recording metadata. */
+  app.get('/recordings/:id', (req: Request, res: Response) => {
+    const record = getRecording(req.params.id);
+    if (!record) {
+      res.status(404).json({ ok: false, error: 'recording_not_found', message: 'Recording not found.' });
+      return;
+    }
+    res.status(200).json(toPublicRecording(record));
+  });
+
+  app.get('/stt/status', async (_req: Request, res: Response) => {
+    res.status(200).json(await sttWorkerManager.getStatus());
   });
 
   app.post('/livekit/dispatch-agent', async (req: Request, res: Response) => {
@@ -191,7 +393,6 @@ export function createLiveKitRouter(env: LiveKitEnv): express.Express {
       return;
     }
 
-    sttWorkerManager.startSttWorker();
     const dispatch = await dispatchSttAgent(room);
     res.status(200).json({
       ok: true,

@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createLiveKitServer, isLiveKitEnvConfigured, resolveLiveKitEnv } from './tokenServer.js';
 import { isGeminiConfigured, GEMINI_MODEL } from './geminiService.js';
-import { sttWorkerManager } from './sttWorkerManager.js';
+import { isRecordingConfigured, recordingConfigSummary, resolveRecordingEnv } from './egressService.js';
 
 dotenv.config();
 
@@ -33,9 +33,6 @@ const server = createLiveKitServer();
 
 server.listen(PORT, HOST, () => {
   const mode = isLiveKitEnvConfigured(resolveLiveKitEnv()) ? 'live' : 'demo';
-  if (mode === 'live') {
-    sttWorkerManager.startSttWorker();
-  }
 
   // Safe status logging — the API key is NEVER printed.
   console.log(`\n================================================================`);
@@ -48,11 +45,11 @@ server.listen(PORT, HOST, () => {
   console.log(`[MeetFlow AI] STT status:                   http://${HOST}:${PORT}/api/stt/status`);
   console.log(`[MeetFlow AI] AI status:                    http://${HOST}:${PORT}/api/ai/status`);
   console.log(`[MeetFlow AI] API status:                   http://${HOST}:${PORT}/api/livekit/status`);
+  console.log(`[MeetFlow AI] Cloud recording configured:   ${isRecordingConfigured(resolveRecordingEnv())} (${recordingConfigSummary(resolveRecordingEnv()).provider} → ${recordingConfigSummary(resolveRecordingEnv()).bucket || 'no bucket'})`);
   console.log(`================================================================\n`);
 });
 
 const cleanup = () => {
-  sttWorkerManager.stopSttWorker();
   process.exit(0);
 };
 process.on('SIGINT', cleanup);

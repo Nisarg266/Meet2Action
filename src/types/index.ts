@@ -3,6 +3,28 @@ export type TaskStatus = 'todo' | 'in-progress' | 'review' | 'done';
 export type DecisionStatus = 'confirmed' | 'pending' | 'open';
 export type MeetingStatus = 'analyzed' | 'processing' | 'live' | 'scheduled';
 
+/**
+ * Real meeting recording metadata backed by LiveKit Egress (server-side room
+ * composite recording → MP4 → S3-compatible object storage).
+ * `recording: null` when a meeting has no recording.
+ */
+export interface MeetingRecording {
+  id: string;
+  egressId: string;
+  meetingId?: string;
+  meetingTitle?: string;
+  roomName?: string;
+  status: 'starting' | 'recording' | 'processing' | 'ready' | 'failed';
+  fileUrl?: string;
+  thumbnailUrl?: string;
+  duration?: number; // seconds
+  fileSize?: number; // bytes
+  startedAt?: string; // ISO
+  endedAt?: string; // ISO
+  storageProvider?: string;
+  error?: string;
+}
+
 export interface DetectedEntities {
   assignee?: string;
   task?: string;
@@ -95,6 +117,17 @@ export interface Meeting {
   status: MeetingStatus;
   platform?: 'Google Meet' | 'Zoom' | 'MS Teams' | 'In-Person' | 'LiveKit';
   meetingUrl?: string;
+  /** LiveKit room this meeting ran in (real meetings). */
+  roomId?: string;
+  roomName?: string;
+  /** Shareable live-meeting URL (https://…/live-meeting/:roomName). */
+  shareUrl?: string;
+  /**
+   * Real LiveKit Egress recording attached to this meeting.
+   * `null`/undefined when the meeting was never recorded.
+   * (Legacy `isRecording` boolean kept only for old mock data compatibility.)
+   */
+  recording?: MeetingRecording | null;
   isRecording?: boolean;
   recordingDuration?: string;
 }
@@ -117,6 +150,8 @@ export interface LiveMeeting {
   openDiscussions?: Decision[];
   /** 'live' = connected to a real LiveKit room, 'demo' = simulated mock mode. */
   mode?: 'live' | 'demo';
+  /** Server-side Egress recording attached to this live session, if any. */
+  recording?: MeetingRecording | null;
 }
 
 export interface FilterOptions {

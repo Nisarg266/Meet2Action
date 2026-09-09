@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ActionItem, Decision, LiveMeeting, TranscriptMessage } from '../types';
+import type { ActionItem, Decision, LiveMeeting, MeetingRecording, TranscriptMessage } from '../types';
 
 export type LivePhase = 'idle' | 'connecting' | 'live' | 'ending' | 'ended';
 export type LiveMode = 'live' | 'demo';
@@ -44,6 +44,10 @@ interface LiveMeetingState {
   localIdentity: string;
   /** Names currently present in the room (mock personas and/or LiveKit identities). */
   roster: string[];
+  /** Server-side Egress recording for this session (null when not recording). */
+  recording: MeetingRecording | null;
+  /** Set when the user explicitly retried after a failure (guards auto-retry loops). */
+  recordingRetryCount: number;
 
   startMeeting: (opts: { roomName: string; title: string; identity: string; name: string }) => void;
   setPhase: (phase: LivePhase) => void;
@@ -60,6 +64,9 @@ interface LiveMeetingState {
   setCamera: (on: boolean) => void;
   setScreenSharing: (on: boolean) => void;
   setRoster: (names: string[]) => void;
+  setRecording: (recording: MeetingRecording | null) => void;
+  clearRecording: () => void;
+  bumpRecordingRetry: () => void;
 
   addTranscriptMessage: (message: TranscriptMessage) => void;
   enrichTranscriptMessage: (messageId: string, payload: EnrichmentPayload) => void;
@@ -116,6 +123,8 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   localName: 'Alex Mercer',
   localIdentity: '',
   roster: [],
+  recording: null,
+  recordingRetryCount: 0,
 
   startMeeting: ({ roomName, title, identity, name }) =>
     set({
@@ -163,6 +172,14 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   setCamera: (isCameraOn) => set({ isCameraOn }),
   setScreenSharing: (isScreenSharing) => set({ isScreenSharing }),
   setRoster: (roster) => set({ roster }),
+
+  setRecording: (recording) =>
+    set((s) => ({
+      recording,
+      meeting: recording ? { ...s.meeting, recording } : s.meeting,
+    })),
+  clearRecording: () => set({ recording: null }),
+  bumpRecordingRetry: () => set((s) => ({ recordingRetryCount: s.recordingRetryCount + 1 })),
 
   addTranscriptMessage: (message) =>
     set((s) => ({
@@ -346,6 +363,8 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
       activeTab: 'transcript',
       unread: noUnread,
       roster: [],
+      recording: null,
+      recordingRetryCount: 0,
     }),
 }));
 

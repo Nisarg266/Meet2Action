@@ -15,13 +15,12 @@ import { useLiveMeetingStore } from '../../store/liveMeetingStore';
 
 type TrackRef = ReturnType<typeof useTracks>[number];
 
-function gridClassFor(count: number): string {
-  if (count <= 1) return 'grid-cols-1';
-  if (count <= 2) return 'grid-cols-1 sm:grid-cols-2';
-  if (count <= 4) return 'grid-cols-2';
-  if (count <= 6) return 'grid-cols-2 lg:grid-cols-3';
-  return 'grid-cols-2 lg:grid-cols-4';
-}
+/**
+ * Hysteresis window (ms) before a new active speaker takes the large stage.
+ * Prevents the layout from reordering wildly on short noise blips — a speaker
+ * must be continuously active for this long before the focus switches.
+ */
+const SPEAKER_SWITCH_DELAY_MS = 1100;
 
 const SpeakingWaveform: React.FC = () => (
   <span className="flex items-end gap-[2px] h-3">
@@ -35,13 +34,18 @@ const SpeakingWaveform: React.FC = () => (
   </span>
 );
 
-const VideoTile: React.FC<{ trackRef: TrackRef; isSpeaking: boolean; compact?: boolean }> = ({
-  trackRef,
-  isSpeaking,
-  compact,
-}) => {
+function displayNameOf(participant: any): string {
+  return participant.isLocal ? 'You' : participant.name || participant.identity || 'Guest';
+}
+
+const VideoTile: React.FC<{
+  trackRef: TrackRef;
+  isSpeaking: boolean;
+  compact?: boolean;
+  contain?: boolean;
+}> = ({ trackRef, isSpeaking, compact, contain }) => {
   const participant = trackRef.participant;
-  const displayName = participant.isLocal ? 'You' : participant.name || participant.identity || 'Guest';
+  const displayName = displayNameOf(participant);
   const hasVideo = Boolean(trackRef.publication && trackRef.publication.isSubscribed !== false && !trackRef.publication.isMuted);
   const isScreenShare = trackRef.source === Track.Source.ScreenShare;
   const micOff = !participant.isMicrophoneEnabled;
@@ -53,8 +57,6 @@ const VideoTile: React.FC<{ trackRef: TrackRef; isSpeaking: boolean; compact?: b
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.25 }}
       className={`relative rounded-xl overflow-hidden bg-slate-900 border transition-shadow ${
-        compact ? 'h-full' : 'h-full'
-      } ${
         isSpeaking
           ? 'border-sky-500 ring-2 ring-sky-500/40 shadow-[0_0_24px_-6px_rgba(14,165,233,0.55)]'
           : 'border-slate-800'
@@ -63,7 +65,9 @@ const VideoTile: React.FC<{ trackRef: TrackRef; isSpeaking: boolean; compact?: b
       {hasVideo ? (
         <VideoTrack
           trackRef={trackRef}
-          className={`absolute inset-0 w-full h-full object-cover ${participant.isLocal && !isScreenShare ? 'scale-x-[-1]' : ''}`}
+          className={`absolute inset-0 w-full h-full ${
+            contain ? 'object-contain bg-slate-950' : 'object-cover'
+          } ${participant.isLocal && !isScreenShare ? 'scale-x-[-1]' : ''}`}
         />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800">
@@ -76,13 +80,24 @@ const VideoTile: React.FC<{ trackRef: TrackRef; isSpeaking: boolean; compact?: b
         </div>
       )}
 
-      <div className="absolute bottom-0 inset-x-0 flex items-center justify-between px-2.5 py-1.5 bg-gradient-to-t from-slate-950/90 to-transparent">
-        <span className="flex items-center gap-1.5 min-w-0">
-          {isSpeaking && <SpeakingWaveform />}
-          <span className="text-[11px] font-semibold text-slate-100 truncate drop-shadow">{displayName}</span>
-        </span>
-        {micOff && <MicOff className="w-3 h-3 text-rose-400 shrink-0" />}
-      </div>
+      {!compact && (
+        <div className="absolute bottom-0 inset-x-0 flex items-center justify-between px-3 py-2 bg-gradient-to-t from-slate-950/90 to-transparent">
+          <span className="flex items-center gap-1.5 min-w-0">
+            {isSpeaking && <SpeakingWaveform />}
+            <span className="text-xs font-semibold text-slate-100 truncate drop-shadow">{displayName}</span>
+          </span>
+          {micOff && <MicOff className="w-3.5 h-3.5 text-rose-400 shrink-0" />}
+        </div>
+      )}
+
+      {compact && (
+        <div className="absolute bottom-0 inset-x-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-t from-slate-950/90 to-transparent">
+          <span className="text-[10px] font-semibold text-slate-100 truncate drop-shadow max-w-[80%]">
+            {displayName}
+          </span>
+          {micOff && <MicOff className="w-3 h-3 text-rose-400 shrink-0" />}
+        </div>
+      )}
     </motion.div>
   );
 };
@@ -93,6 +108,20 @@ export const VideoStage: React.FC = () => {
   const speaking = useSpeakingParticipants();
   const setConnection = useLiveMeetingStore((s) => s.setConnection);
   const [reconnecting, setReconnecting] = React.useState(false);
+
+  // --- Focused (large-stage) participant with speaker hysteresis ---------
+  const [focusIdentity, setFocusIdentity] = React.useState<string | null>(null);
+  const activeSpeakerIdentity = speaking.length > 0 ? speaking[0].identity : null;
+
+  React.useEffect(() => {
+    if (!activeSpeakerIdentity || activeSpeakerIdentity === focusIdentity) return;
+    // Switch the large stage only after the new speaker stays active for the
+    // hysteresis window — brief noise never reshuffles the layout.
+    const timer = window.setTimeout(() => {
+      setFocusIdentity(activeSpeakerIdentity);
+    }, SPEAKER_SWITCH_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeSpeakerIdentity, focusIdentity]);
 
   React.useEffect(() => {
     const update = () => {
@@ -132,39 +161,48 @@ export const VideoStage: React.FC = () => {
       (t.participant.isLocal || !t.publication || t.publication.isSubscribed !== false)
   );
 
-  const visibleRefs = screenShareRef ? cameraRefs.slice(0, 8) : cameraRefs;
+  // Resolve which camera participant owns the large stage:
+  // 1. an active screen share (always wins), 2. the debounced active speaker,
+  // 3. the last focused participant, 4. the first available camera.
+  const focusCameraRef =
+    cameraRefs.find((t) => t.participant.identity === focusIdentity) ||
+    cameraRefs.find((t) => speakingIds.has(t.participant.identity)) ||
+    cameraRefs[0];
+
+  const mainRef = screenShareRef || focusCameraRef || null;
+  const stripRefs = mainRef
+    ? cameraRefs.filter((t) => t.participant.identity !== mainRef.participant.identity).slice(0, 8)
+    : [];
 
   return (
-    <div className="absolute inset-0 bg-slate-950 p-3 sm:p-4 overflow-hidden">
+    <div className="absolute inset-0 bg-slate-950 p-2 sm:p-4 overflow-hidden">
       <RoomAudioRenderer />
 
-      {screenShareRef ? (
-        <div className="h-full flex flex-col gap-3 min-h-0">
+      {mainRef ? (
+        <div className="h-full flex flex-col gap-2 sm:gap-3 min-h-0">
+          {/* Large stage: active speaker (or screen share) — 70-80% of the video stage */}
           <div className="flex-1 min-h-0">
-            <VideoTile trackRef={screenShareRef} isSpeaking={speakingIds.has(screenShareRef.participant.identity)} />
+            <VideoTile
+              trackRef={mainRef}
+              isSpeaking={speakingIds.has(mainRef.participant.identity)}
+              contain={Boolean(screenShareRef)}
+            />
           </div>
-          {visibleRefs.length > 0 && (
-            <div className="h-24 sm:h-28 shrink-0 grid grid-flow-col auto-cols-[minmax(140px,1fr)] gap-3 overflow-x-auto">
-              {visibleRefs.map((ref) => (
-                <VideoTile
-                  key={`${ref.participant.identity}-${ref.source}`}
-                  trackRef={ref}
-                  isSpeaking={speakingIds.has(ref.participant.identity)}
-                  compact
-                />
+
+          {/* Participant thumbnail strip — small tiles along the bottom */}
+          {stripRefs.length > 0 && (
+            <div className="h-[76px] sm:h-24 shrink-0 flex items-stretch gap-2 sm:gap-2.5 overflow-x-auto pb-0.5">
+              {stripRefs.map((ref) => (
+                <div key={`${ref.participant.identity}-${ref.source}`} className="w-32 sm:w-40 shrink-0">
+                  <VideoTile
+                    trackRef={ref}
+                    isSpeaking={speakingIds.has(ref.participant.identity)}
+                    compact
+                  />
+                </div>
               ))}
             </div>
           )}
-        </div>
-      ) : visibleRefs.length > 0 ? (
-        <div className={`h-full grid auto-rows-fr gap-3 ${gridClassFor(visibleRefs.length)}`}>
-          {visibleRefs.map((ref) => (
-            <VideoTile
-              key={`${ref.participant.identity}-${ref.source}`}
-              trackRef={ref}
-              isSpeaking={speakingIds.has(ref.participant.identity)}
-            />
-          ))}
         </div>
       ) : (
         <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">

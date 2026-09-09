@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+server/.recordings.json
+__pycache__/
+*.pyc
+.venv/
+env/
+

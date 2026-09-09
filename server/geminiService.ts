@@ -141,6 +141,11 @@ const BASE_BACKOFF_MS = 600;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 let genAiClient: GoogleGenAI | null = null;
+let rateLimitCooldownUntil = 0;
+
+export function isGeminiInCooldown(): boolean {
+  return Date.now() < rateLimitCooldownUntil;
+}
 
 export function getGeminiClient(): GoogleGenAI | null {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
@@ -174,7 +179,10 @@ function classifyError(error: unknown): GeminiFailure {
     if (error.status === 403) return { kind: 'forbidden', retryable: false, message };
     if (error.status === 404) return { kind: 'model_unavailable', retryable: false, message };
     if (error.status === 400) return { kind: 'bad_request', retryable: false, message };
-    if (error.status === 429) return { kind: 'rate_limited', retryable: true, message };
+    if (error.status === 429) {
+      rateLimitCooldownUntil = Date.now() + 45_000;
+      return { kind: 'rate_limited', retryable: false, message: 'Free tier rate limit reached (45s cooldown)' };
+    }
     if (error.status >= 500) return { kind: 'server_error', retryable: true, message };
     return { kind: 'server_error', retryable: true, message };
   }
@@ -244,6 +252,14 @@ async function callGeminiJson<T>(params: {
       kind: 'not_configured',
       retryable: false,
       message: 'GEMINI_API_KEY is not configured',
+    });
+  }
+
+  if (isGeminiInCooldown()) {
+    throw new GeminiCallError({
+      kind: 'rate_limited',
+      retryable: false,
+      message: 'Gemini free-tier quota cooldown active (using heuristic fallback)',
     });
   }
 
@@ -474,7 +490,7 @@ CRITICAL RULES:
       contents: prompt,
       responseSchema: SEGMENT_SCHEMA,
       contextLabel: 'segment analysis',
-      timeoutMs: 6000,
+      timeoutMs: 15000,
       maxAttempts: 2,
     });
   } catch (error) {

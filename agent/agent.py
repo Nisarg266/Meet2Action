@@ -16,26 +16,32 @@ from livekit.plugins import deepgram
 def get_stt_instance():
     """
     Initializes LiveKit Inference realtime STT.
-    Preferred model: google/gemini-3.5-transcribe-live
-    Fallback: deepgram/nova-3 or auto inference.
+    Preferred model: google/gemini-3.5-transcribe
+    Fallback: google/gemini-3.5-transcribe-live, deepgram/nova-3, or auto inference.
     """
     try:
-        print("[MeetFlow STT] Initializing LiveKit Inference STT (google/gemini-3.5-transcribe-live)...")
+        print("[MeetFlow STT] Initializing LiveKit Inference STT (google/gemini-3.5-transcribe)...", flush=True)
+        return inference.STT(model="google/gemini-3.5-transcribe")
+    except Exception as e:
+        print(f"[MeetFlow STT] LiveKit Inference google/gemini-3.5-transcribe note: {e}", flush=True)
+
+    try:
+        print("[MeetFlow STT] Trying LiveKit Inference STT (google/gemini-3.5-transcribe-live)...", flush=True)
         return inference.STT(model="google/gemini-3.5-transcribe-live")
     except Exception as e:
-        print(f"[MeetFlow STT] LiveKit Inference Gemini STT init warning: {e}")
+        print(f"[MeetFlow STT] LiveKit Inference Gemini-live note: {e}", flush=True)
 
     try:
-        print("[MeetFlow STT] Trying LiveKit Inference Deepgram (deepgram/nova-3)...")
+        print("[MeetFlow STT] Trying LiveKit Inference Deepgram (deepgram/nova-3)...", flush=True)
         return inference.STT(model="deepgram/nova-3")
     except Exception as e:
-        print(f"[MeetFlow STT] LiveKit Inference Deepgram init warning: {e}")
+        print(f"[MeetFlow STT] LiveKit Inference Deepgram note: {e}", flush=True)
 
     try:
-        print("[MeetFlow STT] Trying LiveKit Inference auto...")
+        print("[MeetFlow STT] Trying LiveKit Inference auto...", flush=True)
         return inference.STT(model="auto")
     except Exception as e:
-        print(f"[MeetFlow STT] LiveKit Inference auto fallback warning: {e}")
+        print(f"[MeetFlow STT] LiveKit Inference auto note: {e}", flush=True)
 
     if os.getenv("DEEPGRAM_API_KEY"):
         return deepgram.STT(model="nova-3")

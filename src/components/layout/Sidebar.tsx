@@ -6,6 +6,7 @@ import {
   Video,
   CalendarPlus,
   Radio,
+  CircleDot,
   CheckSquare,
   KanbanSquare,
   MessageSquare,
@@ -52,6 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         { name: 'All Meetings', path: '/meetings', icon: Video },
         { name: 'Start Live Meeting', path: '/live-meeting', icon: Radio, badge: 'LIVE', badgeColor: 'bg-rose-100 text-rose-700' },
+        { name: 'Recordings', path: '/recordings', icon: CircleDot },
         { name: 'Analyze Transcript', path: '/analyze', icon: Sparkles, badge: 'AI', badgeColor: 'bg-sky-100 text-sky-700' },
         { name: 'Schedule Meeting', path: '/schedule', icon: CalendarPlus },
       ],

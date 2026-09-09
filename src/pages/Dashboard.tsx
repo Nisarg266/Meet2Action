@@ -17,7 +17,8 @@ import {
   TrendingUp,
   ShieldCheck,
   Zap,
-  Users
+  Users,
+  CircleDot
 } from 'lucide-react';
 import { exportTasksToCSV, exportTasksToMarkdown } from '../utils/exportUtils';
 
@@ -29,6 +30,7 @@ export const Dashboard: React.FC = () => {
   const highPriorityTasks = actionItems.filter((i) => i.priority === 'High' && i.status !== 'done');
   const confirmedDecisions = decisions.filter((d) => d.status === 'confirmed');
   const pendingDecisions = decisions.filter((d) => d.status === 'pending' || d.status === 'open');
+  const recordedMeetings = meetings.filter((m) => m.recording);
   const needsAttentionTasks = actionItems.filter(
     (i) => i.confidence < 70 || !i.assignee || !i.isConfirmed
   );
@@ -87,7 +89,7 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* KPI Metric Cards Row (Animated Entrance & Hover Lift) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Card 1: Action Items */}
         <motion.div
           initial={{ opacity: 0, y: 18 }}
@@ -187,7 +189,38 @@ export const Dashboard: React.FC = () => {
           </div>
         </motion.div>
 
-        {/* Card 4: AI Extraction Accuracy */}
+      {/* Card 4: Cloud Recordings */}
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.18 }}
+          whileHover={{ y: -3, transition: { duration: 0.2 } }}
+          onClick={() => navigate('/recordings')}
+          className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs hover:shadow-md hover:border-rose-300 transition-all cursor-pointer group"
+        >
+          <div className="flex items-center justify-between text-slate-500 mb-3">
+            <span className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-400">
+              Recorded Meetings
+            </span>
+            <div className="p-2 rounded-lg bg-rose-50 text-rose-700 group-hover:scale-110 transition-transform">
+              <CircleDot className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-bold text-slate-900 font-display">{recordedMeetings.length}</span>
+            <span className="text-xs font-medium text-slate-500">
+              {recordedMeetings.filter((m) => m.recording?.status === 'ready').length} ready
+            </span>
+          </div>
+          <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Cloud MP4 via LiveKit Egress</span>
+            <span className="text-sky-700 font-medium group-hover:translate-x-1 transition-transform flex items-center gap-1">
+              Library &rarr;
+            </span>
+          </div>
+        </motion.div>
+
+        {/* Card 5: AI Extraction Accuracy */}
         <motion.div
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}

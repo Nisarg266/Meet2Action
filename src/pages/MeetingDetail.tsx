@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/appStore';
 import { LiveMeetingIntelligence } from '../components/meeting/LiveMeetingIntelligence';
+import { MeetingRecordingCard } from '../components/meeting/MeetingRecordingCard';
 import { ActionItemCard } from '../components/action-items/ActionItemCard';
 import { DecisionCard } from '../components/decisions/DecisionCard';
 import { TranscriptViewer } from '../components/transcript/TranscriptViewer';
@@ -117,6 +118,9 @@ export const MeetingDetail: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* MEETING RECORDING card (real Egress recording when available) */}
+      <MeetingRecordingCard meeting={meeting} />
 
       {/* Tabs Navigation */}
       <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto pb-px">

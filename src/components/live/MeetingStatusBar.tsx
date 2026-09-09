@@ -1,8 +1,10 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Copy, Users, Radio, Sparkles, PhoneOff, ArrowLeft, Wifi, WifiOff } from 'lucide-react';
+import { Copy, Users, Radio, Sparkles, PhoneOff, ArrowLeft, Wifi, WifiOff, CircleDot, RotateCcw, Cloud } from 'lucide-react';
 import { useLiveMeetingStore, formatDuration, type LiveConnectionState, type AiStatus, type LiveMode } from '../../store/liveMeetingStore';
 import { useAppStore } from '../../store/appStore';
+import { startRoomRecording } from '../../services/recordingService';
+import { getLocalIdentity } from '../../services/livekitService';
 
 interface MeetingStatusBarProps {
   roomName: string;
@@ -26,8 +28,11 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
   const elapsedSeconds = useLiveMeetingStore((s) => s.elapsedSeconds);
   const aiSource = useLiveMeetingStore((s) => s.aiSource);
   const transcriptStatus = useLiveMeetingStore((s) => s.transcriptStatus);
+  const recording = useLiveMeetingStore((s) => s.recording);
   const addToast = useAppStore((s) => s.addToast);
   const navigate = useNavigate();
+  const [recInfoOpen, setRecInfoOpen] = React.useState(false);
+  const [isRetrying, setIsRetrying] = React.useState(false);
 
   const copyInvite = async () => {
     const link = `${window.location.origin}/live-meeting/${roomName}`;
@@ -36,6 +41,45 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
       addToast('Invite link copied to clipboard', 'success');
     } catch {
       addToast(`Invite link: ${link}`, 'info');
+    }
+  };
+
+  const retryRecording = async () => {
+    const store = useLiveMeetingStore.getState();
+    if (isRetrying || !roomName || !store.meeting.id) return;
+    setIsRetrying(true);
+    store.clearRecording();
+    try {
+      const result = await startRoomRecording({
+        roomName,
+        meetingId: store.meeting.id,
+        meetingTitle: store.meeting.title,
+        requestedBy: getLocalIdentity(),
+      });
+      useLiveMeetingStore.getState().setRecording({
+        id: result.recordingId,
+        egressId: result.egressId,
+        meetingId: store.meeting.id,
+        meetingTitle: store.meeting.title,
+        roomName,
+        status: result.status || 'starting',
+        startedAt: result.startedAt || new Date().toISOString(),
+        storageProvider: 'cloud',
+      });
+      addToast('Recording restarted', 'success');
+    } catch (err) {
+      useLiveMeetingStore.getState().setRecording({
+        id: `failed-${Date.now()}`,
+        egressId: '',
+        meetingId: store.meeting.id,
+        roomName,
+        status: 'failed',
+        error: err instanceof Error ? err.message : 'Recording could not be started.',
+      });
+      addToast('Recording could not be started. The meeting will continue.', 'warning');
+    } finally {
+      setIsRetrying(false);
+      setRecInfoOpen(false);
     }
   };
 
@@ -48,8 +92,10 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
           ? 'RECONNECTING…'
           : 'OFFLINE';
 
+  const recStatus = recording?.status;
+
   return (
-    <header className="h-14 shrink-0 bg-slate-950 border-b border-slate-800 px-3 sm:px-5 flex items-center justify-between gap-3">
+    <header className="h-14 shrink-0 bg-slate-950 border-b border-slate-800 px-3 sm:px-5 flex items-center justify-between gap-3 relative z-40">
       <div className="flex items-center gap-3 min-w-0">
         <button
           onClick={() => navigate('/meetings')}
@@ -92,6 +138,53 @@ export const MeetingStatusBar: React.FC<MeetingStatusBarProps> = ({
           </span>
           LIVE
         </span>
+
+        {/* --- Real Egress recording indicator (shown ONLY after successful start) --- */}
+        {(recStatus === 'recording' || recStatus === 'starting') && (
+          <button
+            onClick={() => setRecInfoOpen((v) => !v)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/15 border border-red-500/50 text-red-300 text-[10px] font-mono font-bold tracking-wider transition-colors hover:bg-red-500/25 cursor-pointer"
+            title="Cloud recording in progress — click for details"
+          >
+            <CircleDot className={`w-3 h-3 ${recStatus === 'recording' ? 'animate-pulse' : 'animate-spin'}`} />
+            {recStatus === 'recording' ? `REC ${formatDuration(elapsedSeconds)}` : 'REC · STARTING'}
+          </button>
+        )}
+
+        {recStatus === 'failed' && (
+          <button
+            onClick={() => void retryRecording()}
+            disabled={isRetrying}
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-800 border border-rose-500/40 text-rose-300 text-[10px] font-mono font-bold tracking-wider transition-colors hover:bg-slate-700 disabled:opacity-50 cursor-pointer"
+            title="Recording failed — retry cloud recording"
+          >
+            <RotateCcw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
+            REC FAILED · RETRY
+          </button>
+        )}
+
+        {recInfoOpen && recStatus && recStatus !== 'failed' && (
+          <div className="absolute top-14 right-3 sm:right-5 z-50 w-60 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-3.5 space-y-2 text-left">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold font-display text-slate-100">Recording</span>
+              <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider text-red-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+                {recStatus === 'recording' ? 'Live' : recStatus === 'starting' ? 'Starting' : recStatus}
+              </span>
+            </div>
+            <div className="text-[11px] font-mono text-slate-400 space-y-1">
+              <div>Duration: {formatDuration(elapsedSeconds)}</div>
+              <div className="flex items-center gap-1.5">
+                <Cloud className="w-3 h-3 text-sky-400" />
+                Storage: Cloud
+              </div>
+              <div className="truncate" title={recording?.egressId}>Egress: {recording?.egressId || '…'}</div>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-relaxed border-t border-slate-800 pt-2">
+              Server-side LiveKit Egress captures the full room (all participants + audio) as MP4.
+            </p>
+          </div>
+        )}
 
         <span className="font-mono text-xs text-slate-300 tabular-nums">
           {formatDuration(elapsedSeconds)}

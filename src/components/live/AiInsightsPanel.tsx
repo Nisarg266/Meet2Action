@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, FileText, CheckSquare, ShieldCheck, MessageCircleQuestion, AudioLines, AlertCircle } from 'lucide-react';
+import { Sparkles, FileText, CheckSquare, ShieldCheck, MessageCircleQuestion, AudioLines, AlertCircle, ChevronUp } from 'lucide-react';
 import type { TranscriptMessage } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { useLiveMeetingStore, type InsightTab } from '../../store/liveMeetingStore';
@@ -183,6 +183,7 @@ export const AiInsightsPanel: React.FC = () => {
   const aiSource = useLiveMeetingStore((s) => s.aiSource);
   const mode = useLiveMeetingStore((s) => s.mode);
   const unread = useLiveMeetingStore((s) => s.unread);
+  const [isMobileOpen, setIsMobileOpen] = React.useState(false);
 
   const actionItems = meeting.actionItems;
   const decisions = meeting.decisions.filter((d) => d.status !== 'open');
@@ -194,6 +195,12 @@ export const AiInsightsPanel: React.FC = () => {
     decisions: decisions.length,
     discussions: discussions.length,
   };
+
+  const totalUnread =
+    (activeTab === 'transcript' ? 0 : unread.transcript) +
+    (activeTab === 'actions' ? 0 : unread.actions) +
+    (activeTab === 'decisions' ? 0 : unread.decisions) +
+    (activeTab === 'discussions' ? 0 : unread.discussions);
 
   const emptyStates: Record<InsightTab, { title: string; hint: string }> = {
     transcript: { title: 'Listening…', hint: 'Transcript appears here in real time.' },
@@ -212,8 +219,40 @@ export const AiInsightsPanel: React.FC = () => {
   };
 
   return (
-    <aside className="w-full lg:w-[400px] shrink-0 bg-white border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col min-h-0 h-[46vh] lg:h-auto">
-      <div className="px-4 pt-4 pb-3 border-b border-slate-100 shrink-0">
+    <aside
+      className={`w-full lg:w-[400px] shrink-0 bg-white border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col min-h-0
+        fixed lg:static inset-x-0 bottom-0 z-40 h-[74vh] lg:h-auto shadow-2xl lg:shadow-none
+        transition-transform duration-300 ease-out ${
+          isMobileOpen ? 'translate-y-0' : 'translate-y-[calc(100%-2.75rem)]'
+        } lg:translate-y-0`}
+    >
+      {/* Mobile drawer handle — the insights never permanently cover the main video */}
+      <button
+        onClick={() => setIsMobileOpen((v) => !v)}
+        className="lg:hidden h-11 shrink-0 w-full flex items-center justify-between px-4 border-b border-slate-100 cursor-pointer"
+        aria-expanded={isMobileOpen}
+        aria-label={isMobileOpen ? 'Collapse AI insights' : 'Expand AI insights'}
+      >
+        <span className="flex items-center gap-2 min-w-0">
+          <Sparkles className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+          <span className="text-xs font-bold font-display text-slate-900 tracking-tight truncate">Live AI Insights</span>
+          <span className="text-[10px] font-mono text-slate-400">
+            {counts.transcript} tx · {counts.actions} act · {counts.decisions} dec
+          </span>
+        </span>
+        <span className="flex items-center gap-1.5 shrink-0">
+          {totalUnread > 0 && (
+            <span className="min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-rose-500 text-white text-[9px] font-mono font-bold">
+              {totalUnread > 9 ? '9+' : totalUnread}
+            </span>
+          )}
+          <ChevronUp
+            className={`w-4 h-4 text-slate-500 transition-transform ${isMobileOpen ? 'rotate-180' : ''}`}
+          />
+        </span>
+      </button>
+
+      <div className="hidden lg:block px-4 pt-4 pb-3 border-b border-slate-100 shrink-0">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="w-7 h-7 rounded-lg bg-sky-50 border border-sky-200/80 flex items-center justify-center">
