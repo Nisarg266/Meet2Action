@@ -217,13 +217,26 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   clearReactions: () => set({ reactions: [] }),
 
   addTranscriptMessage: (message) =>
-    set((s) => ({
-      meeting: { ...s.meeting, transcript: [...s.meeting.transcript, message] },
-      unread:
-        s.activeTab === 'transcript'
-          ? s.unread
-          : { ...s.unread, transcript: s.unread.transcript + 1 },
-    })),
+    set((s) => {
+      if (s.meeting.transcript.some((m) => m.id === message.id)) {
+        return s;
+      }
+      const last = s.meeting.transcript[s.meeting.transcript.length - 1];
+      if (
+        last &&
+        last.speaker === message.speaker &&
+        last.text.trim().toLowerCase() === message.text.trim().toLowerCase()
+      ) {
+        return s;
+      }
+      return {
+        meeting: { ...s.meeting, transcript: [...s.meeting.transcript, message] },
+        unread:
+          s.activeTab === 'transcript'
+            ? s.unread
+            : { ...s.unread, transcript: s.unread.transcript + 1 },
+      };
+    }),
 
   enrichTranscriptMessage: (messageId, payload) =>
     set((s) => ({

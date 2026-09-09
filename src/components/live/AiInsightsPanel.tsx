@@ -80,7 +80,7 @@ const TranscriptFeed: React.FC = () => {
         void fetch('/api/livekit/dispatch-agent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomName }),
+          body: JSON.stringify({ roomName, force: true }),
         }).catch(() => {});
       }
     };

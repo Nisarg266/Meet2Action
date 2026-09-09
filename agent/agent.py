@@ -55,18 +55,31 @@ async def entrypoint(ctx: JobContext):
     my_identity = ctx.room.local_participant.identity
     print(f"[MeetFlow STT] Joined room {ctx.room.name} as {my_identity}")
 
+    # Ensure only ONE agent is active per room (exit if another agent is already present)
+    other_agents = [
+        p for p in ctx.room.remote_participants.values()
+        if p.identity != my_identity and (p.identity.startswith("agent-") or p.identity == "meetflow-stt")
+    ]
+    if len(other_agents) > 0:
+        print(f"[MeetFlow STT] Another agent ({other_agents[0].identity}) is already active in room {ctx.room.name}. Exiting duplicate job.")
+        return
+
     # Broadcast agent ready event so frontend can immediately confirm STT is live
-    ready_payload = json.dumps({
-        "type": "stt-agent-ready",
-        "agentName": "meetflow-stt",
-        "room": ctx.room.name,
-        "status": "live",
-        "model": "google/gemini-3.5-transcribe"
-    })
-    try:
-        await ctx.room.local_participant.publish_data(ready_payload, topic="lk.transcription", reliable=True)
-    except Exception as e:
-        print(f"[MeetFlow STT] Agent ready broadcast warning: {e}")
+    async def broadcast_ready():
+        ready_payload = json.dumps({
+            "type": "stt-agent-ready",
+            "agentName": "meetflow-stt",
+            "room": ctx.room.name,
+            "status": "live",
+            "model": "google/gemini-3.5-transcribe-live"
+        })
+        try:
+            await ctx.room.local_participant.publish_data(ready_payload, topic="lk.transcription", reliable=True)
+            print(f"[MeetFlow STT] Broadcasted stt-agent-ready to room {ctx.room.name}")
+        except Exception as e:
+            print(f"[MeetFlow STT] Agent ready broadcast note: {e}")
+
+    await broadcast_ready()
 
     shutdown_event = asyncio.Event()
 
@@ -87,8 +100,10 @@ async def entrypoint(ctx: JobContext):
 
         async def transcribe_track(track: rtc.Track, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
             track_sid = track.sid
+            if track_sid in active_tasks:
+                return
             speaker_name = participant.name or participant.identity or "Participant"
-            print(f"[MeetFlow STT] Subscribing to audio track {track_sid} of participant {participant.identity} ({speaker_name})")
+            print(f"[MeetFlow STT] Subscribing to audio track {track_sid} of participant {participant.identity} ({speaker_name})", flush=True)
 
             audio_stream = rtc.AudioStream(track, sample_rate=16000)
             stt_stream = stt_instance.stream()
@@ -102,7 +117,10 @@ async def entrypoint(ctx: JobContext):
                 except Exception as err:
                     print(f"[MeetFlow STT] forward_audio error for {speaker_name}: {err}")
                 finally:
-                    stt_stream.end_input()
+                    try:
+                        stt_stream.end_input()
+                    except Exception:
+                        pass
 
             async def read_transcripts():
                 try:
@@ -160,7 +178,9 @@ async def entrypoint(ctx: JobContext):
                             print(f"[MeetFlow STT] publish_data error: {err}")
 
                         if is_final:
-                            print(f"[MeetFlow STT] final transcript received speaker={speaker_name} text=\"{text}\"")
+                            print(f"[MeetFlow STT] final transcript received speaker={speaker_name} text=\"{text}\"", flush=True)
+                        else:
+                            print(f"[MeetFlow STT] interim transcript speaker={speaker_name} text=\"{text}\"", flush=True)
                 except asyncio.CancelledError:
                     pass
                 except Exception as err:
@@ -186,6 +206,13 @@ async def entrypoint(ctx: JobContext):
             if track.kind == rtc.TrackKind.KIND_AUDIO:
                 asyncio.create_task(transcribe_track(track, publication, participant))
 
+        @ctx.room.on("track_published")
+        def on_track_published(publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
+            if participant.identity == my_identity or participant.identity == "meetflow-stt" or participant.identity.startswith("agent-"):
+                return
+            if publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
+                asyncio.create_task(transcribe_track(publication.track, publication, participant))
+
         @ctx.room.on("track_unsubscribed")
         def on_track_unsubscribed(track: rtc.Track, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
             if track.sid in active_tasks:
@@ -196,11 +223,15 @@ async def entrypoint(ctx: JobContext):
         @ctx.room.on("participant_connected")
         def on_participant_connected(participant: rtc.RemoteParticipant):
             print(f"[MeetFlow STT] participant joined={participant.identity} name={participant.name}")
+            asyncio.create_task(broadcast_ready())
 
         @ctx.room.on("participant_disconnected")
         def on_participant_disconnected(participant: rtc.RemoteParticipant):
             print(f"[MeetFlow STT] participant disconnected={participant.identity}")
-            humans = [p for p in ctx.room.remote_participants.values() if p.identity != my_identity and not p.identity.startswith("agent-")]
+            humans = [
+                p for p in ctx.room.remote_participants.values()
+                if p.identity != my_identity and not p.identity.startswith("agent-") and p.identity != "meetflow-stt"
+            ]
             if len(humans) == 0:
                 print("[MeetFlow STT] All human participants left, stopping agent session.")
                 shutdown_event.set()
