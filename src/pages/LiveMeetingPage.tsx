@@ -39,6 +39,7 @@ import { AiInsightsPanel } from '../components/live/AiInsightsPanel';
 import { StageOverlays, type ChatMessage } from '../components/live/StageOverlays';
 import { EndMeetingModal } from '../components/live/EndMeetingModal';
 import { FinalAnalysisOverlay } from '../components/live/FinalAnalysisOverlay';
+import { EmojiReactionsOverlay, playReactionPop } from '../components/live/EmojiReactions';
 
 const FINAL_STEPS: { id: number; label: string }[] = [
   { id: 1, label: 'Stopping cloud recording (Egress)' },
@@ -430,6 +431,7 @@ const MeetingShell: React.FC<MeetingShellProps> = ({
         <div className="relative flex-1 min-h-[240px] lg:min-h-0 flex flex-col">
           <div className="flex-1 relative min-h-0">
             {stage}
+            <EmojiReactionsOverlay />
             <StageOverlays
               mode={mode}
               isChatOpen={isChatOpen}
@@ -991,6 +993,16 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
             });
           }
         }
+        if (json.type === 'reaction' && json.emoji) {
+          const senderName = json.sender || participant?.name || participant?.identity || 'Guest';
+          useLiveMeetingStore.getState().addReaction({
+            id: json.id,
+            emoji: json.emoji,
+            sender: senderName,
+          });
+          playReactionPop();
+          return;
+        }
       } catch (e) {
         console.warn('Error handling DataChannel message:', e);
       }
@@ -1007,6 +1019,35 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
       addToast(`Media error: ${error.message || 'could not toggle device'}`, 'error');
     });
   };
+
+  const handleSendReaction = React.useCallback(
+    (emoji: string) => {
+      useLiveMeetingStore.getState().addReaction({
+        emoji,
+        sender: localName,
+      });
+      playReactionPop();
+
+      if (room && room.localParticipant) {
+        try {
+          const payload = JSON.stringify({
+            type: 'reaction',
+            emoji,
+            sender: localName,
+            id: `rx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          });
+          const encoder = new TextEncoder();
+          void room.localParticipant.publishData(encoder.encode(payload), {
+            reliable: false,
+            topic: 'reaction',
+          });
+        } catch (err) {
+          console.warn('[MeetFlow Reaction] Broadcast error:', err);
+        }
+      }
+    },
+    [room, localName]
+  );
 
   return (
     <MeetingShell
@@ -1030,6 +1071,7 @@ const LiveRoomInner: React.FC<LiveRoomProps> = (props) => {
           onToggleChat={props.onToggleChat}
           onTogglePeople={props.onTogglePeople}
           onEndMeeting={props.onEndMeeting}
+          onSendReaction={handleSendReaction}
         />
       }
     />
@@ -1656,6 +1698,25 @@ export const LiveMeetingPage: React.FC = () => {
               onToggleChat={toggleChat}
               onTogglePeople={togglePeople}
               onEndMeeting={() => setEndModalOpen(true)}
+              onSendReaction={(emoji) => {
+                const name = useLiveMeetingStore.getState().localName;
+                useLiveMeetingStore.getState().addReaction({ emoji, sender: name });
+                playReactionPop();
+
+                // In demo mode, simulate an interactive teammate response
+                window.setTimeout(() => {
+                  if (useLiveMeetingStore.getState().phase !== 'live') return;
+                  const demoTeammates = ['Sophia Chen', 'Marcus Vance', 'Elena Rostova'];
+                  const randomTeammate = demoTeammates[Math.floor(Math.random() * demoTeammates.length)];
+                  const companionEmojis = ['👏', '👍', '❤️', '🔥', '🎉'];
+                  const companionEmoji = companionEmojis[Math.floor(Math.random() * companionEmojis.length)];
+                  useLiveMeetingStore.getState().addReaction({
+                    emoji: companionEmoji,
+                    sender: randomTeammate,
+                  });
+                  playReactionPop();
+                }, 850);
+              }}
             />
           }
         />

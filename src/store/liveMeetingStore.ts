@@ -25,6 +25,14 @@ export interface EnrichmentPayload {
   associatedDecisionId?: string;
 }
 
+export interface ActiveReaction {
+  id: string;
+  emoji: string;
+  sender: string;
+  xPercent: number; // 15 to 85 percent horizontal position
+  createdAt: number;
+}
+
 interface LiveMeetingState {
   phase: LivePhase;
   mode: LiveMode;
@@ -48,6 +56,12 @@ interface LiveMeetingState {
   recording: MeetingRecording | null;
   /** Set when the user explicitly retried after a failure (guards auto-retry loops). */
   recordingRetryCount: number;
+  /** Active animated emoji reactions floating over the stage. */
+  reactions: ActiveReaction[];
+
+  addReaction: (reaction: { emoji: string; sender: string; id?: string; xPercent?: number }) => void;
+  removeReaction: (id: string) => void;
+  clearReactions: () => void;
 
   startMeeting: (opts: { roomName: string; title: string; identity: string; name: string }) => void;
   setPhase: (phase: LivePhase) => void;
@@ -125,6 +139,7 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
   roster: [],
   recording: null,
   recordingRetryCount: 0,
+  reactions: [],
 
   startMeeting: ({ roomName, title, identity, name }) =>
     set({
@@ -149,6 +164,7 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
       isMicOn: true,
       isCameraOn: true,
       isScreenSharing: false,
+      reactions: [],
       localName: name,
       localIdentity: identity,
       roster: [name],
@@ -180,6 +196,25 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
     })),
   clearRecording: () => set({ recording: null }),
   bumpRecordingRetry: () => set((s) => ({ recordingRetryCount: s.recordingRetryCount + 1 })),
+
+  addReaction: ({ emoji, sender, id, xPercent }) =>
+    set((s) => {
+      const newReaction: ActiveReaction = {
+        id: id || `rx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        emoji,
+        sender,
+        xPercent: typeof xPercent === 'number' ? xPercent : Math.floor(15 + Math.random() * 70),
+        createdAt: Date.now(),
+      };
+      return {
+        reactions: [...s.reactions.slice(-24), newReaction],
+      };
+    }),
+  removeReaction: (id) =>
+    set((s) => ({
+      reactions: s.reactions.filter((r) => r.id !== id),
+    })),
+  clearReactions: () => set({ reactions: [] }),
 
   addTranscriptMessage: (message) =>
     set((s) => ({
@@ -365,6 +400,7 @@ export const useLiveMeetingStore = create<LiveMeetingState>((set) => ({
       roster: [],
       recording: null,
       recordingRetryCount: 0,
+      reactions: [],
     }),
 }));
 

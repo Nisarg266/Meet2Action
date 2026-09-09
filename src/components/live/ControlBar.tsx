@@ -1,5 +1,6 @@
 import React from 'react';
-import { Mic, MicOff, Video, VideoOff, MonitorUp, MessageSquare, Users, PhoneOff, MonitorX } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, MonitorUp, MessageSquare, Users, PhoneOff, MonitorX, Smile } from 'lucide-react';
+import { REACTION_EMOJIS } from './EmojiReactions';
 
 interface ControlBarProps {
   isMicOn: boolean;
@@ -14,6 +15,7 @@ interface ControlBarProps {
   onToggleChat: () => void;
   onTogglePeople: () => void;
   onEndMeeting: () => void;
+  onSendReaction?: (emoji: string) => void;
   mode: 'live' | 'demo';
 }
 
@@ -61,9 +63,30 @@ export const ControlBar: React.FC<ControlBarProps> = ({
   onToggleChat,
   onTogglePeople,
   onEndMeeting,
+  onSendReaction,
   mode,
 }) => {
   const [screenShareNotice, setScreenShareNotice] = React.useState(false);
+  const [isReactionPickerOpen, setIsReactionPickerOpen] = React.useState(false);
+  const pickerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!isReactionPickerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setIsReactionPickerOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsReactionPickerOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isReactionPickerOpen]);
 
   const handleScreenShare = () => {
     if (mode === 'demo' && !isScreenSharing) {
@@ -71,6 +94,12 @@ export const ControlBar: React.FC<ControlBarProps> = ({
       setTimeout(() => setScreenShareNotice(false), 2600);
     }
     onToggleScreenShare();
+  };
+
+  const handleSendReaction = (emoji: string) => {
+    if (onSendReaction) {
+      onSendReaction(emoji);
+    }
   };
 
   return (
@@ -101,6 +130,33 @@ export const ControlBar: React.FC<ControlBarProps> = ({
         </ControlButton>
 
         <span className="w-px h-8 bg-slate-800 mx-0.5 sm:mx-1" />
+
+        {/* EMOJI REACTIONS BUTTON & FLOATING PICKER */}
+        <div className="relative" ref={pickerRef}>
+          <ControlButton
+            label="React with emoji"
+            state={isReactionPickerOpen ? 'active' : 'default'}
+            onClick={() => setIsReactionPickerOpen((prev) => !prev)}
+          >
+            <Smile className="w-5 h-5" />
+          </ControlButton>
+
+          {isReactionPickerOpen && (
+            <div className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl p-1.5 sm:p-2 shadow-2xl z-50 flex items-center gap-1 sm:gap-1.5 animate-in fade-in zoom-in-95 duration-150">
+              {REACTION_EMOJIS.map((r) => (
+                <button
+                  key={r.emoji}
+                  type="button"
+                  title={r.label}
+                  onClick={() => handleSendReaction(r.emoji)}
+                  className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-xl text-xl sm:text-2xl hover:bg-slate-800 hover:scale-125 active:scale-95 transition-all cursor-pointer select-none"
+                >
+                  {r.emoji}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <ControlButton
           label="Meeting chat"
